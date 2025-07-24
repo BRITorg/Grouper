@@ -1,0 +1,11 @@
+backports.tarfile==1.2.0
+fuzzywuzzy==0.18.0
+importlib-metadata==8.0.0
+jaraco.collections==5.1.0
+packaging==24.2
+pandas==2.2.3
+platformdirs==4.2.2
+python-levenshtein==0.26.1
+scikit-learn==1.6.1
+tomli==2.0.1
+tqdm==4.67.1
