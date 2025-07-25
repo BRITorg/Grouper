@@ -84,6 +84,7 @@ def preprocess(text):
 
     # --- Common abbreviation replacements ---
     text = re.sub(r'\bjct\b', 'junction', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bst\.?\b', 'street', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcir\.?\b', 'circle', text, flags=re.IGNORECASE)
     text = re.sub(r'\bave\.?\b', 'avenue', text, flags=re.IGNORECASE)
     text = re.sub(r'\brt\.?\b', 'route', text, flags=re.IGNORECASE)
@@ -271,6 +272,20 @@ def preprocess(text):
     # Remove "Verbatim" variations
     text = re.sub(r'[\(\[]\s*verbatim\s*[\)\]]', '', text, flags=re.IGNORECASE)
 
+    # --- Normalize patterns like "6mi.E." or "5kmW" → "6 miles east" ---
+    text = re.sub(
+        r'(\d+(\.\d+)?)(?:\s*)mi\.?\s*([nsew])\b',
+        lambda m: f"{m.group(1)} miles {'north' if m.group(3).lower() == 'n' else 'south' if m.group(3).lower() == 's' else 'east' if m.group(3).lower() == 'e' else 'west'}",
+        text,
+        flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r'(\d+(\.\d+)?)(?:\s*)km\.?\s*([nsew])\b',
+        lambda m: f"{m.group(1)} kilometers {'north' if m.group(3).lower() == 'n' else 'south' if m.group(3).lower() == 's' else 'east' if m.group(3).lower() == 'e' else 'west'}",
+        text,
+        flags=re.IGNORECASE
+    )
+
     # Remove all punctuation except for periods used in decimal numbers
     text = re.sub(r'(?<!\d)\.(?!\d)', ' ', text)  # remove periods not part of decimal numbers
     text = re.sub(r'[^\w\s.]', ' ', text)        # remove other punctuation
@@ -345,8 +360,10 @@ def custom_tokenizer(text):
 
 # Custom stop words tuned for geographic data
 custom_stop_words = [
-    'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of',
-    'or', 'but', 'from', 'between', 'along', 'texas', 'oklahoma'
+    'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of', 'or', 'but', 'from', 'between', 'along',
+    'texas', 'oklahoma', 
+    'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', ''
+    'x'
 ]
 
 vectorizer = TfidfVectorizer(
@@ -441,7 +458,16 @@ for i in range(len(vocab_keys)):
 # --- Apply alias substitutions into normalized locality ---
 def apply_aliases(text, alias_map):
     tokens = text.split()
-    return ' '.join([alias_map.get(tok, tok) for tok in tokens])
+    result = []
+
+    for tok in tokens:
+        if tok in alias_map:
+            result.append('*' + alias_map[tok])
+        else:
+            result.append(tok)
+
+    return ' '.join(result)
+
 
 grouped['normalized_locality'] = grouped['normalized_locality'].apply(lambda t: apply_aliases(t, merged))
 
