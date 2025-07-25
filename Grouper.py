@@ -143,12 +143,17 @@ def preprocess(text):
     ]
     dir_pattern = '|'.join(directions)
     
+    units_pattern = r'miles?|kilometers?|km|mi'
+    directions_pattern = r'north|south|east|west|northeast|northwest|southeast|southwest'
+    
     for word, digit in number_words.items():
         text = re.sub(
-            rf'\b{word}\b(?=\s*(miles?|{dir_pattern})\b)',
+            rf'\b{word}\b(?=\s*({units_pattern}|{directions_pattern})\b)',
             digit,
-            text
+            text,
+            flags=re.IGNORECASE
         )
+
 
     # --- Normalize spelled-out fractions like "one-half" ---
     fraction_words = {
@@ -157,11 +162,10 @@ def preprocess(text):
         r'\btwo[\s-]+thirds\b': '0.66',
         r'\bone[\s-]+fourth\b': '0.25',
         r'\bthree[\s-]+fourths\b': '0.75',
+        r'\bthree[\s-]+quarters?\b': '0.75',  # ← handles both quarter and quarters
         r'\bone[\s-]+quarter\b': '0.25',
-        r'\bthree[\s-]+quarters\b': '0.75',
-        r'\bone[\s-]+eighth\b': '0.125'
-
     }
+
     for pattern, replacement in fraction_words.items():
         text = re.sub(pattern, replacement, text)
     
@@ -199,7 +203,10 @@ def preprocess(text):
     # Normalize leading decimals with zeros (".5" to "0.5") if preceded by whitespace or line start
     text = re.sub(r'(^|\s)\.(\d+)', r'\g<1>0.\2', text)
 
-    # --- Normalize cases like "1mi", "3mi.", "2 mi", "2 mi." ---
+    # Normalize numbers like "1." to "1" (when not part of a decimal)
+    text = re.sub(r'\b(\d+)\.(?!\d)', r'\1', text)
+
+    # Normalize cases like "1mi", "3mi.", "2 mi", "2 mi." ---
     text = re.sub(r'(\d+(\.\d+)?)(\s*)mi\.?\b', r'\1 miles', text, flags=re.IGNORECASE)
 
     # --- Normalize km to kilometers ---
@@ -222,7 +229,13 @@ def preprocess(text):
     lambda m: f"{m.group(1)} miles { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
     text,
     flags=re.IGNORECASE
-)
+    )
+
+    # Insert a space between numbers and units if stuck together (e.g., "5miles" → "5 miles")
+    text = re.sub(r'(\d+(?:\.\d+)?)(?=\s*?(miles|mile|km|kilometers|kilometer|mi|ft|feet))', r'\1 ', text, flags=re.IGNORECASE)
+
+    # Remove "of a" between number and miles/kilometers (e.g., "0.75 of a miles" → "0.75 miles")
+    text = re.sub(r'(\d+(?:\.\d+)?)(\s+)of\s+a\s+(miles?|mile|kilometers?|km)\b', r'\1 \3', text, flags=re.IGNORECASE)
 
     # Strip .0 from numbers like 5.0 miles to 5 miles
     text = re.sub(r'(\d+)\.0\b', r'\1', text)
@@ -233,7 +246,7 @@ def preprocess(text):
         r'\1 miles \2',
         text,
         flags=re.IGNORECASE
-)
+    )
 
     # --- Force singular "mile" to plural "miles" ---
     text = re.sub(r'\bmile\b', 'miles', text, flags=re.IGNORECASE)
@@ -355,7 +368,10 @@ from rapidfuzz import fuzz
 vocab_keys = list(vocab.keys())
 token_freq = {token: X[:, idx].nnz for token, idx in vocab.items()}  # document frequency
 protected_tokens = set([
-    "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"
+    "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
+    "northern", "southern", "eastern", "western", "central",
+    "first", "second", "third", "fourth", "fifth", "sixth",
+    "seventh", "eighth", "ninth", "tenth"
 ])
 merged = {}
 
@@ -370,6 +386,8 @@ def dynamic_threshold(token1, token2, base_threshold=75, max_threshold=90):
         # Linear interpolation between base and max
         return base_threshold + ((avg_len - 5) / 10) * (max_threshold - base_threshold)
 
+township_pattern = r'^[trs]\d{1,3}[nsew]?$'  # define once before loop
+
 for i in range(len(vocab_keys)):
     token_i = vocab_keys[i]
 
@@ -380,6 +398,14 @@ for i in range(len(vocab_keys)):
     ):
         continue
 
+    # --- Skip ordinal-looking tokens like "26th", "41st", etc. ---
+    if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_i):
+        continue
+
+    # --- Skip township/range/section codes like "t18n", "r3e", "s12" ---
+    if re.fullmatch(township_pattern, token_i):
+        continue
+
     for j in range(i + 1, len(vocab_keys)):
         token_j = vocab_keys[j]
 
@@ -388,6 +414,14 @@ for i in range(len(vocab_keys)):
             or token_j in protected_tokens
             or token_j in merged
         ):
+            continue
+
+        # --- Skip ordinal-looking tokens like "56th", "1st", etc. ---
+        if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_j):
+            continue
+
+        # --- Skip township/range/section codes like "t18n", "r3e", "s12" ---
+        if re.fullmatch(township_pattern, token_j):
             continue
 
         # --- Length similarity check ---
