@@ -28,6 +28,18 @@ def preprocess(text):
     # --- Normalize possessives ---
     text = re.sub(r"\b(\w+)'s\b", r"\1s", text)
 
+
+    # Normalize all variants of "mi", "mi.", " mi " to " miles "
+    text = re.sub(r'\bmi\.?\b', ' miles ', text, flags=re.IGNORECASE)
+    # --- Normalize "km" to " kilometers "
+    text = re.sub(r'\bkm\.?\b', ' kilometers ', text, flags=re.IGNORECASE)
+    
+    text = re.sub(r'\s+', ' ', text)
+
+    # Insert a space between numbers and units if stuck together (e.g., "5miles" → "5 miles")
+    text = re.sub(r'(\d+(?:\.\d+)?)(?=\s*?(miles|mile|km|kilometers|kilometer|mi|ft|feet))', r'\1 ', text, flags=re.IGNORECASE)
+
+
     # --- Normalize all forms of 'state highway' ---
     text = re.sub(r'\bstate\s+highway\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bstate\s+hiway\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
@@ -206,34 +218,6 @@ def preprocess(text):
 
     # Normalize numbers like "1." to "1" (when not part of a decimal)
     text = re.sub(r'\b(\d+)\.(?!\d)', r'\1', text)
-
-    # Normalize cases like "1mi", "3mi.", "2 mi", "2 mi." ---
-    text = re.sub(r'(\d+(\.\d+)?)(\s*)mi\.?\b', r'\1 miles', text, flags=re.IGNORECASE)
-
-    # --- Normalize km to kilometers ---
-    text = re.sub(r'\bkm\b', 'kilometers', text, flags=re.IGNORECASE)
-    
-    # normalize patterns like "8.5kmE" to "8.5 kilometers east"
-    text = re.sub(
-        r'(\d+(\.\d+)?)(?:\s*)km\.?\s*([nsew])\b',
-        lambda m: f"{m.group(1)} kilometers { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # convert patterns like "3 km", "3km." to "3 kilometers"
-    text = re.sub(r'(\d+(\.\d+)?)(\s*)km\.?\b', r'\1 kilometers', text, flags=re.IGNORECASE)
-
-    # --- Normalize patterns like "8.5miW" to "8.5 miles west" ---
-    text = re.sub(
-    r'(\d+(\.\d+)?)(?:\s*)mi\.?\s*([nsew])\b',
-    lambda m: f"{m.group(1)} miles { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
-    text,
-    flags=re.IGNORECASE
-    )
-
-    # Insert a space between numbers and units if stuck together (e.g., "5miles" → "5 miles")
-    text = re.sub(r'(\d+(?:\.\d+)?)(?=\s*?(miles|mile|km|kilometers|kilometer|mi|ft|feet))', r'\1 ', text, flags=re.IGNORECASE)
 
     # Remove "of a" between number and miles/kilometers (e.g., "0.75 of a miles" → "0.75 miles")
     text = re.sub(r'(\d+(?:\.\d+)?)(\s+)of\s+a\s+(miles?|mile|kilometers?|km)\b', r'\1 \3', text, flags=re.IGNORECASE)
