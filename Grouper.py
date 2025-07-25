@@ -331,7 +331,7 @@ grouped = df.drop_duplicates(subset=grouping_field).copy()
 grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
 grouped['distance_direction'] = grouped['normalized_locality'].apply(extract_distance_direction)
 
-# --- TF-IDF ---
+# --- TF-IDF setup ---
 important_phrases = [
     'north', 'south', 'east', 'west',
     'northeast', 'northwest', 'southeast', 'southwest'
@@ -349,24 +349,19 @@ custom_stop_words = [
     'or', 'but', 'from', 'between', 'along', 'texas', 'oklahoma'
 ]
 
-
 vectorizer = TfidfVectorizer(
     tokenizer=custom_tokenizer,
     lowercase=False,
     stop_words=custom_stop_words
 )
 
+# --- Initial TF-IDF matrix on pre-alias normalized locality ---
 X = vectorizer.fit_transform(grouped['normalized_locality'])
 vocab = vectorizer.vocabulary_
-for token, idx in vocab.items():
-    if token in important_phrases or re.fullmatch(r'\d+(\.\d+)?', token):
-        X[:, idx] *= 1.10
 
-# --- Fuzzy token aliasing: prefer aliasing uncommon to common tokens ---
-from rapidfuzz import fuzz
-
-vocab_keys = list(vocab.keys())
 token_freq = {token: X[:, idx].nnz for token, idx in vocab.items()}  # document frequency
+vocab_keys = list(vocab.keys())
+
 protected_tokens = set([
     "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
     "northern", "southern", "eastern", "western", "central",
@@ -375,7 +370,6 @@ protected_tokens = set([
 ])
 merged = {}
 
-# --- Dynamic threshold based on token length ---
 def dynamic_threshold(token1, token2, base_threshold=75, max_threshold=90):
     avg_len = (len(token1) + len(token2)) / 2
     if avg_len <= 5:
@@ -383,11 +377,11 @@ def dynamic_threshold(token1, token2, base_threshold=75, max_threshold=90):
     elif avg_len >= 15:
         return max_threshold
     else:
-        # Linear interpolation between base and max
         return base_threshold + ((avg_len - 5) / 10) * (max_threshold - base_threshold)
 
-township_pattern = r'^[trs]\d{1,3}[nsew]?$'  # define once before loop
+township_pattern = r'^[trs]\d{1,3}[nsew]?$'
 
+# --- Fuzzy token aliasing ---
 for i in range(len(vocab_keys)):
     token_i = vocab_keys[i]
 
@@ -398,11 +392,8 @@ for i in range(len(vocab_keys)):
     ):
         continue
 
-    # --- Skip ordinal-looking tokens like "26th", "41st", etc. ---
     if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_i):
         continue
-
-    # --- Skip township/range/section codes like "t18n", "r3e", "s12" ---
     if re.fullmatch(township_pattern, token_i):
         continue
 
@@ -416,15 +407,12 @@ for i in range(len(vocab_keys)):
         ):
             continue
 
-        # --- Skip ordinal-looking tokens like "56th", "1st", etc. ---
         if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_j):
             continue
-
-        # --- Skip township/range/section codes like "t18n", "r3e", "s12" ---
         if re.fullmatch(township_pattern, token_j):
             continue
 
-        # --- Length similarity check ---
+        # Length similarity check
         len_i = len(token_i)
         len_j = len(token_j)
         if min(len_i, len_j) / max(len_i, len_j) < 0.8:
@@ -448,13 +436,29 @@ for i in range(len(vocab_keys)):
                 continue
 
             print(f"Aliasing '{other}' ({token_freq[other]}) to '{canonical}' ({token_freq[canonical]}) (score {score:.2f} >= {threshold:.2f})")
-
-            X[:, vocab[canonical]] += X[:, vocab[other]]
-            X[:, vocab[other]] = 0
             merged[other] = canonical
 
+# --- Apply alias substitutions into normalized locality ---
+def apply_aliases(text, alias_map):
+    tokens = text.split()
+    return ' '.join([alias_map.get(tok, tok) for tok in tokens])
+
+grouped['normalized_locality'] = grouped['normalized_locality'].apply(lambda t: apply_aliases(t, merged))
+
+# --- Rebuild TF-IDF matrix on alias-applied text ---
+X = vectorizer.fit_transform(grouped['normalized_locality'])
+vocab = vectorizer.vocabulary_
+
+# --- Re-weight directional and numeric tokens ---
+for token, idx in vocab.items():
+    if token in important_phrases or re.fullmatch(r'\d+(\.\d+)?', token):
+        X[:, idx] *= 1.10
+
+# --- Cosine similarity ---
 similarity = cosine_similarity(X)
+
 threshold = 0.85
+
 
 suggested_ids = [-1] * len(grouped)
 group_counter = 1
