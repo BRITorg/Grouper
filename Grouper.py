@@ -37,6 +37,7 @@ def preprocess(text):
     text = re.sub(r'\bst\.?\s*hwy\.?\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bus\s+hwy\.?\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bstate\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bhy\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     # --- Fallback catch-all for unnumbered state highways ---
     text = re.sub(r'\b(state\s+hwy|state\s+highway|sh|st\.?\s*hwy)\b', 'highway', text, flags=re.IGNORECASE)
 
@@ -56,6 +57,9 @@ def preprocess(text):
     text = re.sub(r'\bus\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     # --- Catch generic references to U.S. highways without numbers ---
     text = re.sub(r'\b(u\.?\s*s\.?|us|ush)\s+(highway|hwy)\b', 'highway', text, flags=re.IGNORECASE)
+    # Normalize Interstate variants like "I-40", "I 40", "I. 40", "Interstate 40" → "highway 40"
+    text = re.sub(r'\binterstate\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bi[\.\-\s]?(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
 
     # Remove "U.S.A.", "USA", "U. S. A.", etc.
     text = re.sub(r'\bu\.?\s*s\.?\s*a\.?\b', '', text, flags=re.IGNORECASE)
@@ -85,6 +89,7 @@ def preprocess(text):
     text = re.sub(r'\brt\.?\b', 'route', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(\d{1,4}(?:st|nd|rd|th)?)\s+st\.?\b', r'\1 street', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcr\s*(\d+)\b', r'county road \1', text, flags=re.IGNORECASE)
+    text = re.sub(r'\brd\.?\b', 'road', text, flags=re.IGNORECASE)
     text = re.sub(r'\bhwy\.?\b', 'highway', text, flags=re.IGNORECASE)
     text = re.sub(r'\bmt\.?\b', 'mountain', text, flags=re.IGNORECASE)
     text = re.sub(r'\bmtn\.?\b', 'mountain', text, flags=re.IGNORECASE)
@@ -95,57 +100,18 @@ def preprocess(text):
     text = re.sub(r'\briv\.(?=\W|$)', 'river', text, flags=re.IGNORECASE)
     text = re.sub(r'\bmi\b', 'miles', text, flags=re.IGNORECASE)
     text = re.sub(r'\bft\.?\b', 'fort', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bcp\.?\b', 'camp', text, flags=re.IGNORECASE)
     text = re.sub(r'&', 'and', text)
     text = re.sub(r'\+', 'and', text)
     text = re.sub(r'\bok\b', 'oklahoma', text, flags=re.IGNORECASE)
     text = re.sub(r'\bokla\b', 'oklahoma', text, flags=re.IGNORECASE)
     text = re.sub(r'\btx\b', 'texas', text, flags=re.IGNORECASE)
     text = re.sub(r'\bTex\b', 'texas', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bar\b', 'arkansas', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bark\b', 'arkansas', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcoll\.?\b', 'collected', text, flags=re.IGNORECASE)
     text = re.sub(r'\bWMA\.?\b', 'wildlife management area', text, flags=re.IGNORECASE)
     text = re.sub(r'\bNRA\.?\b', 'national recreation area', text, flags=re.IGNORECASE)
-
-    # Normalize leading decimals with zeros (".5" to "0.5") if preceded by whitespace or line start
-    text = re.sub(r'(^|\s)\.(\d+)', r'\g<1>0.\2', text)
-
-    # --- Normalize cases like "1mi", "3mi.", "2 mi", "2 mi." ---
-    text = re.sub(r'(\d+(\.\d+)?)(\s*)mi\.?\b', r'\1 miles', text, flags=re.IGNORECASE)
-
-    # --- Normalize km to kilometers ---
-    text = re.sub(r'\bkm\b', 'kilometers', text, flags=re.IGNORECASE)
-    
-    # normalize patterns like "8.5kmE" to "8.5 kilometers east"
-    text = re.sub(
-        r'(\d+(\.\d+)?)(?:\s*)km\.?\s*([nsew])\b',
-        lambda m: f"{m.group(1)} kilometers { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # convert patterns like "3 km", "3km." to "3 kilometers"
-    text = re.sub(r'(\d+(\.\d+)?)(\s*)km\.?\b', r'\1 kilometers', text, flags=re.IGNORECASE)
-
-    # --- Normalize patterns like "8.5miW" to "8.5 miles west" ---
-    text = re.sub(
-    r'(\d+(\.\d+)?)(?:\s*)mi\.?\s*([nsew])\b',
-    lambda m: f"{m.group(1)} miles { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
-    text,
-    flags=re.IGNORECASE
-)
-
-    # Strip .0 from numbers like 5.0 miles to 5 miles
-    text = re.sub(r'(\d+)\.0\b', r'\1', text)
-
-    # Normalize numbers directly before compass directions with no unit to miles
-    text = re.sub(
-        r'(\d+(?:\.\d+)?)\s*(north|south|east|west|northeast|northwest|southeast|southwest)\b',
-        r'\1 miles \2',
-        text,
-        flags=re.IGNORECASE
-)
-
-    # --- Force singular "mile" to plural "miles" ---
-    text = re.sub(r'\bmile\b', 'miles', text, flags=re.IGNORECASE)
 
     # --- Convert spelled-out numbers before miles to digits ---
     number_words = {
@@ -192,7 +158,9 @@ def preprocess(text):
         r'\bone[\s-]+fourth\b': '0.25',
         r'\bthree[\s-]+fourths\b': '0.75',
         r'\bone[\s-]+quarter\b': '0.25',
-        r'\bthree[\s-]+quarters\b': '0.75'
+        r'\bthree[\s-]+quarters\b': '0.75',
+        r'\bone[\s-]+eighth\b': '0.125'
+
     }
     for pattern, replacement in fraction_words.items():
         text = re.sub(pattern, replacement, text)
@@ -203,6 +171,8 @@ def preprocess(text):
     text = re.sub(r'(\d+)\s+3/4\b', lambda m: str(float(m.group(1)) + 0.75), text)
     text = re.sub(r'(\d+)\s+1/3\b', lambda m: str(float(m.group(1)) + 0.33), text)
     text = re.sub(r'(\d+)\s+2/3\b', lambda m: str(float(m.group(1)) + 0.66), text)
+    text = re.sub(r'(\d+)\s+1/8\b', lambda m: str(float(m.group(1)) + 0.125), text)
+
 
     # --- Mixed Unicode fractions ---
     text = re.sub(r'(\d+)\s*½', lambda m: str(float(m.group(1)) + 0.5), text)
@@ -210,7 +180,7 @@ def preprocess(text):
     text = re.sub(r'(\d+)\s*¾', lambda m: str(float(m.group(1)) + 0.75), text)
     text = re.sub(r'(\d+)\s*⅓', lambda m: str(float(m.group(1)) + 0.33), text)
     text = re.sub(r'(\d+)\s*⅔', lambda m: str(float(m.group(1)) + 0.66), text)
-
+    text = re.sub(r'(\d+)\s*⅛', lambda m: str(float(m.group(1)) + 0.125), text)
 
     # --- Standalone fractions ---
     text = re.sub(r'\b1/2\b', '0.5', text)
@@ -218,15 +188,58 @@ def preprocess(text):
     text = re.sub(r'\b3/4\b', '0.75', text)
     text = re.sub(r'\b1/3\b', '0.33', text)
     text = re.sub(r'\b2/3\b', '0.66', text)
+    text = re.sub(r'\b1/8\b', '0.125', text)
     text = re.sub(r'\b½\b', '0.5', text)
     text = re.sub(r'\b¼\b', '0.25', text)
     text = re.sub(r'\b¾\b', '0.75', text)
     text = re.sub(r'\b⅓\b', '0.33', text)
     text = re.sub(r'\b⅔\b', '0.66', text)
+    text = re.sub(r'\b⅛\b', '0.125', text)
+
+    # Normalize leading decimals with zeros (".5" to "0.5") if preceded by whitespace or line start
+    text = re.sub(r'(^|\s)\.(\d+)', r'\g<1>0.\2', text)
+
+    # --- Normalize cases like "1mi", "3mi.", "2 mi", "2 mi." ---
+    text = re.sub(r'(\d+(\.\d+)?)(\s*)mi\.?\b', r'\1 miles', text, flags=re.IGNORECASE)
+
+    # --- Normalize km to kilometers ---
+    text = re.sub(r'\bkm\b', 'kilometers', text, flags=re.IGNORECASE)
+    
+    # normalize patterns like "8.5kmE" to "8.5 kilometers east"
+    text = re.sub(
+        r'(\d+(\.\d+)?)(?:\s*)km\.?\s*([nsew])\b',
+        lambda m: f"{m.group(1)} kilometers { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # convert patterns like "3 km", "3km." to "3 kilometers"
+    text = re.sub(r'(\d+(\.\d+)?)(\s*)km\.?\b', r'\1 kilometers', text, flags=re.IGNORECASE)
+
+    # --- Normalize patterns like "8.5miW" to "8.5 miles west" ---
+    text = re.sub(
+    r'(\d+(\.\d+)?)(?:\s*)mi\.?\s*([nsew])\b',
+    lambda m: f"{m.group(1)} miles { {'n':'north', 's':'south', 'e':'east', 'w':'west'}[m.group(3).lower()] }",
+    text,
+    flags=re.IGNORECASE
+)
+
+    # Strip .0 from numbers like 5.0 miles to 5 miles
+    text = re.sub(r'(\d+)\.0\b', r'\1', text)
+
+    # Normalize numbers directly before compass directions with no unit to miles
+    text = re.sub(
+        r'(\d+(?:\.\d+)?)\s*(north|south|east|west|northeast|northwest|southeast|southwest)\b',
+        r'\1 miles \2',
+        text,
+        flags=re.IGNORECASE
+)
+
+    # --- Force singular "mile" to plural "miles" ---
+    text = re.sub(r'\bmile\b', 'miles', text, flags=re.IGNORECASE)
 
     # --- Remove approximate qualifiers like "ca", "ca.", or "about" with punctuation ---
     text = re.sub(r'\b(?:about|ca\.?)\s+', '', text, flags=re.IGNORECASE)
-
     
     # --- Remove trailing periods from known words ---
     text = re.sub(r'\b(miles|north|south|east|west|northeast|northwest|southeast|southwest)\.', r'\1', text)
@@ -320,7 +333,7 @@ def custom_tokenizer(text):
 # Custom stop words tuned for geographic data
 custom_stop_words = [
     'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of',
-    'or', 'but', 'from', 'between', 'along'
+    'or', 'but', 'from', 'between', 'along', 'texas', 'oklahoma'
 ]
 
 
