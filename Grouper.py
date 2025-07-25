@@ -33,8 +33,18 @@ def preprocess(text):
     text = re.sub(r'\bmi\.?\b', ' miles ', text, flags=re.IGNORECASE)
     # --- Normalize "km" to " kilometers "
     text = re.sub(r'\bkm\.?\b', ' kilometers ', text, flags=re.IGNORECASE)
-    
+    text = re.sub(r"(\d+)\s*['’]", r"\1 feet", text)
+    # Normalize feet and meters
     text = re.sub(r'\s+', ' ', text)
+    # change " m " to meters if preceding number is above 20, miles if below 20
+    def convert_m_unit(match):
+        num = float(match.group(1))
+        unit = "meters" if num > 20 else "miles"
+        return f"{int(num) if num.is_integer() else num} {unit}"
+    
+    # Handles glued and spaced versions like "100m" and "100 m"
+    text = re.sub(r'\b(\d+(?:\.\d+)?)\s*m\b', convert_m_unit, text, flags=re.IGNORECASE)
+
 
     # Insert a space between numbers and units if stuck together (e.g., "5miles" → "5 miles")
     text = re.sub(r'(\d+(?:\.\d+)?)(?=\s*?(miles|mile|km|kilometers|kilometer|mi|ft|feet))', r'\1 ', text, flags=re.IGNORECASE)
@@ -100,6 +110,7 @@ def preprocess(text):
     text = re.sub(r'\bcir\.?\b', 'circle', text, flags=re.IGNORECASE)
     text = re.sub(r'\bave\.?\b', 'avenue', text, flags=re.IGNORECASE)
     text = re.sub(r'\brt\.?\b', 'route', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bdr\.?\b', 'drive', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(\d{1,4}(?:st|nd|rd|th)?)\s+st\.?\b', r'\1 street', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcr\s*(\d+)\b', r'county road \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\brd\.?\b', 'road', text, flags=re.IGNORECASE)
@@ -125,6 +136,10 @@ def preprocess(text):
     text = re.sub(r'\bcoll\.?\b', 'collected', text, flags=re.IGNORECASE)
     text = re.sub(r'\bWMA\.?\b', 'wildlife management area', text, flags=re.IGNORECASE)
     text = re.sub(r'\bNRA\.?\b', 'national recreation area', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bco\.\b', 'county', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bco\b', 'county', text, flags=re.IGNORECASE)
+    #remove word before "county" but not if it's "county road"
+    text = re.sub(r'\b(?!road\b)\w+\s+county\b', '', text, flags=re.IGNORECASE)
 
     # --- Convert spelled-out numbers before miles to digits ---
     number_words = {
@@ -253,8 +268,10 @@ def preprocess(text):
     # Remove pound/hash symbols
     text = text.replace('#', '')
 
-    # Remove "Verbatim" variations
+    # Remove "Verbatim", "no additional locality" variations
     text = re.sub(r'[\(\[]\s*verbatim\s*[\)\]]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[\s*no additional locality data on sheet\s*\]', '', text, flags=re.IGNORECASE)
+
 
     # --- Normalize patterns like "6mi.E." or "5kmW" → "6 miles east" ---
     text = re.sub(
@@ -346,7 +363,7 @@ def custom_tokenizer(text):
 custom_stop_words = [
     'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of', 'or', 'but', 'from', 'between', 'along',
     'texas', 'oklahoma', 
-    'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', ''
+    'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', 'bed', 'bank'
     'x'
 ]
 
@@ -538,7 +555,9 @@ null_strings = [
     '[No location data on label.]',
     '[ Not readable ]',
     '[none]',
-    'none listed'
+    'none listed',
+    'no further locality',
+    'no location'
 ]
 grouped.loc[
     grouped['locality'].isnull()
