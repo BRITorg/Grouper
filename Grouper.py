@@ -521,7 +521,7 @@ for idx in range(len(grouped)):
 grouped['Confidence'] = [round(c * 100, 1) for c in confidence_scores]
 
 # --- Validate suggested groups by distance/direction ---
-grouped['Final_Suggested_ID'] = grouped['Suggested_ID'].astype(str)
+grouped['Grouper_ID'] = grouped['Suggested_ID'].astype(str)
 
 for group_id in grouped['Suggested_ID'].unique():
     members = grouped[grouped['Suggested_ID'] == group_id]
@@ -540,10 +540,10 @@ for group_id in grouped['Suggested_ID'].unique():
     for idx, sig in enumerate(signatures, start=1):  # start=1 to begin with .1
         suffix = f".{idx}"
         to_update = members[distance_lists.apply(tuple) == sig].index
-        grouped.loc[to_update, 'Final_Suggested_ID'] = f"{group_id}{suffix}"
+        grouped.loc[to_update, 'Grouper_ID'] = f"{group_id}{suffix}"
 
 
-# If the original locality is blank, null, or matches known placeholders, set Final_Suggested_ID to 0
+# If the original locality is blank, null, or matches known placeholders, set Grouper_ID to 0
 null_strings = [
     'unknown',
     'no locality',
@@ -564,13 +564,13 @@ grouped.loc[
     | (grouped['locality'].str.strip() == '')
     | (grouped['locality'].str.strip().str.lower().isin([s.lower() for s in null_strings]))
     ,
-    'Final_Suggested_ID'
+    'Grouper_ID'
 ] = '0'
 
 
 # --- Merge back ---
 output_df = df.merge(
-    grouped[[grouping_field, 'Final_Suggested_ID', 'normalized_locality']],
+    grouped[[grouping_field, 'Grouper_ID', 'normalized_locality']],
     on=grouping_field,
     how='left'
 )
@@ -578,7 +578,7 @@ output_df = df.merge(
 # --- Export ---
 columns_to_export = [
     'catalogNumber', 'institutionCode', 'collectionCode', 'county',
-    'locality', 'bels_location_id', 'Final_Suggested_ID', 'normalized_locality', 'Confidence'
+    'locality', 'bels_location_id', 'Grouper_ID', 'normalized_locality', 'Confidence'
 ]
 # For consistent columns, protect against missing
 columns_to_export = [col for col in columns_to_export if col in grouped.columns]
@@ -595,7 +595,7 @@ def sort_key(val):
         return (float('inf'), float('inf'))
 
 export_df = grouped[columns_to_export].drop_duplicates()
-export_df = export_df.sort_values(by='Final_Suggested_ID', key=lambda col: col.map(sort_key))
+export_df = export_df.sort_values(by='Grouper_ID', key=lambda col: col.map(sort_key))
 
 output_file = os.path.splitext(csv_path)[0] + '-key.csv'
 export_df.to_csv(output_file, index=False, encoding='utf-8-sig')
