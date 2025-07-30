@@ -28,12 +28,14 @@ def preprocess(text):
     # --- Normalize possessives ---
     text = re.sub(r"\b(\w+)'s\b", r"\1s", text)
 
-
     # Normalize all variants of "mi", "mi.", " mi " to " miles "
+    text = re.sub(r'\bmis\.?\b', ' miles ', text, flags=re.IGNORECASE)
     text = re.sub(r'\bmi\.?\b', ' miles ', text, flags=re.IGNORECASE)
+
     # --- Normalize "km" to " kilometers "
     text = re.sub(r'\bkm\.?\b', ' kilometers ', text, flags=re.IGNORECASE)
     text = re.sub(r"(\d+)\s*['’]", r"\1 feet", text)
+
     # Normalize feet and meters
     text = re.sub(r'\s+', ' ', text)
     # change " m " to meters if preceding number is above 20, miles if below 20
@@ -86,6 +88,30 @@ def preprocess(text):
     # Remove "U.S.A.", "USA", "U. S. A.", etc.
     text = re.sub(r'\bu\.?\s*s\.?\s*a\.?\b', '', text, flags=re.IGNORECASE)
 
+    from rapidfuzz import process
+
+    # Define canonical directions and a score threshold
+    DIRECTION_TERMS = [
+        'north', 'south', 'east', 'west',
+        'northeast', 'northwest', 'southeast', 'southwest',
+        'north-northeast', 'north-northwest',
+        'south-southeast', 'south-southwest',
+        'east-northeast', 'east-southeast',
+        'west-northwest', 'west-southwest'
+    ]
+    FUZZY_DIR_THRESHOLD = 90  # Adjust as needed
+    
+    def correct_direction_typos(text):
+        tokens = text.split()
+        corrected = []
+        for tok in tokens:
+            match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
+            if score >= FUZZY_DIR_THRESHOLD:
+                corrected.append(match)
+            else:
+                corrected.append(tok)
+        return ' '.join(corrected)
+
     # --- Normalize compound compass directions ---
     text = re.sub(r'(?<!\w)[nN][\.\s]?[eE](?!\w)', 'northeast', text)
     text = re.sub(r'(?<!\w)[nN][\.\s]?[wW](?!\w)', 'northwest', text)
@@ -103,6 +129,37 @@ def preprocess(text):
     text = re.sub(r'\bnorth[\.\s]+west\b', 'northwest', text, flags=re.IGNORECASE)
     text = re.sub(r'\bsouth[\.\s]+east\b', 'southeast', text, flags=re.IGNORECASE)
     text = re.sub(r'\bsouth[\.\s]+west\b', 'southwest', text, flags=re.IGNORECASE)
+
+    # Normalize space-separated compound directions like "west southwest" → "west-southwest"
+    compound_directions = {
+        r'\bnorth\s+northeast\b': 'north-northeast',
+        r'\bnorth\s+northwest\b': 'north-northwest',
+        r'\bsouth\s+southeast\b': 'south-southeast',
+        r'\bsouth\s+southwest\b': 'south-southwest',
+        r'\beast\s+northeast\b': 'east-northeast',
+        r'\beast\s+southeast\b': 'east-southeast',
+        r'\bwest\s+northwest\b': 'west-northwest',
+        r'\bwest\s+southwest\b': 'west-southwest',
+    }
+    
+    for pattern, replacement in compound_directions.items():
+        text = re.sub(pattern, replacement, text)
+
+    # Normalize compass abbreviations (e.g., NNE → north-northeast)
+    abbr_map = {
+        'nne': 'north-northeast',
+        'nnw': 'north-northwest',
+        'ene': 'east-northeast',
+        'ese': 'east-southeast',
+        'sse': 'south-southeast',
+        'ssw': 'south-southwest',
+        'wsw': 'west-southwest',
+        'wnw': 'west-northwest'
+    }
+
+    for abbr, full in abbr_map.items():
+        text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
+
 
     # --- Common abbreviation replacements ---
     text = re.sub(r'\bjct\b', 'junction', text, flags=re.IGNORECASE)
@@ -125,6 +182,7 @@ def preprocess(text):
     text = re.sub(r'\bmi\b', 'miles', text, flags=re.IGNORECASE)
     text = re.sub(r'\bft\.?\b', 'fort', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcp\.?\b', 'camp', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+x\s+', ' ', text)
     text = re.sub(r'&', 'and', text)
     text = re.sub(r'\+', 'and', text)
     text = re.sub(r'\bok\b', 'oklahoma', text, flags=re.IGNORECASE)
@@ -166,8 +224,12 @@ def preprocess(text):
     }
 
     directions = [
-        'north', 'south', 'east', 'west',
-        'northeast', 'northwest', 'southeast', 'southwest'
+            'north', 'south', 'east', 'west',
+            'northeast', 'northwest', 'southeast', 'southwest',
+            'north-northeast', 'north-northwest',
+            'south-southeast', 'south-southwest',
+            'east-northeast', 'east-southeast',
+            'west-northwest', 'west-southwest'
     ]
     dir_pattern = '|'.join(directions)
     
@@ -289,7 +351,22 @@ def preprocess(text):
 
     # Remove all punctuation except for periods used in decimal numbers
     text = re.sub(r'(?<!\d)\.(?!\d)', ' ', text)  # remove periods not part of decimal numbers
-    text = re.sub(r'[^\w\s.]', ' ', text)        # remove other punctuation
+    # Preserve hyphens within known compound directions before stripping punctuation
+    DIRECTION_COMPOUNDS = [
+        'north-northeast', 'north-northwest', 'south-southeast', 'south-southwest',
+        'east-northeast', 'east-southeast', 'west-northwest', 'west-southwest'
+    ]
+    
+    for compound in DIRECTION_COMPOUNDS:
+        text = text.replace(compound, compound.replace('-', '___'))  # temp protect hyphens
+    
+    # Now remove unwanted punctuation
+    text = re.sub(r'[^\w\s.]', ' ', text)
+    text = re.sub(r'(?<!\d)\.(?!\d)', ' ', text)
+    
+    # Restore hyphens
+    text = text.replace('___', '-')
+
 
     # --- Normalize whitespace ---
     text = re.sub(r'\s+', ' ', text)
@@ -299,23 +376,28 @@ def preprocess(text):
 # --- Extract distances and directions ---
 def extract_distance_direction(text):
     """
-    Example: '3 miles south and 2 miles east' returns a sorted list of (distance, direction)
+    Extracts (distance, direction, unit) from phrases like:
+    '125 meters east, 0.35 miles south, 40 feet west'
     """
     if pd.isnull(text):
         return []
+
+    # Expecting normalized units only: miles, kilometers, meters, feet
     pattern = re.compile(
-        r'(\d+(?:\.\d+)?)\s*(?:miles?|mi|kilometers|km)?[\s,]*(north|south|east|west|northeast|northwest|southeast|southwest)\b',
+        r'(\d+(?:\.\d+)?)\s*(miles|kilometers|meters|feet)?[\s,]*(north|south|east|west|northeast|northwest|southeast|southwest)\b',
         flags=re.IGNORECASE
     )
 
     matches = pattern.findall(text)
     results = []
-    for m in matches:
-        num = float(m[0])
+    for number, unit, direction in matches:
+        num = float(number)
         if num.is_integer():
             num = int(num)
-        results.append( (str(num), m[1].lower()) )
-    # sort results by direction then distance
+        unit = unit.lower() if unit else ''
+        results.append((str(num), direction.lower(), unit))
+
+    # Sort by direction then distance
     results.sort(key=lambda x: (x[1], float(x[0])))
     return results
 
@@ -344,6 +426,7 @@ if 'locality' not in df.columns or grouping_field not in df.columns:
 
 # --- Unique localities by grouping field ---
 grouped = df.drop_duplicates(subset=grouping_field).copy()
+grouped = grouped.reset_index(drop=True)
 grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
 grouped['distance_direction'] = grouped['normalized_locality'].apply(extract_distance_direction)
 
@@ -486,43 +569,60 @@ similarity = cosine_similarity(X)
 
 threshold = 0.85
 
-
 suggested_ids = [-1] * len(grouped)
 group_counter = 1
-group_members = {}
 
 for i in range(len(grouped)):
     if suggested_ids[i] != -1:
         continue
     suggested_ids[i] = group_counter
-    group_members[group_counter] = [i]
     for j in range(i + 1, len(grouped)):
         if suggested_ids[j] == -1 and similarity[i, j] >= threshold:
             suggested_ids[j] = group_counter
-            group_members[group_counter].append(j)
     group_counter += 1
+
+grouped['Suggested_ID'] = suggested_ids
+grouped['Grouper_ID'] = grouped['Suggested_ID'].astype(str)
+
+# Now safe to group by Grouper_ID
+group_members = (
+    grouped
+    .drop(columns=['Grouper_ID'])
+    .groupby(grouped['Grouper_ID'])
+    .apply(lambda df: df.index.tolist())
+    .to_dict()
+)
 
 grouped['Suggested_ID'] = suggested_ids
 
 # --- Compute confidence ---
 confidence_scores = []
+
 for idx in range(len(grouped)):
-    group_id = grouped.iloc[idx]['Suggested_ID']
+    group_id = grouped.iloc[idx]['Grouper_ID']
     members = group_members[group_id]
+
+    # If the group has only one member, confidence is 1
     if len(members) == 1:
-        confidence = 1.0
-    else:
-        sims = []
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                sims.append(similarity[members[i], members[j]])
-        confidence = sum(sims) / len(sims)
+        confidence_scores.append(1.0)
+        continue
+
+    # Calculate average similarity to other members of the group
+    sims = [
+        similarity[idx, other_idx]
+        for other_idx in members
+        if other_idx != idx
+    ]
+    confidence = sum(sims) / len(sims)
     confidence_scores.append(confidence)
+
+# Assign after loop
 grouped['Confidence'] = [round(c * 100, 1) for c in confidence_scores]
 
-# --- Validate suggested groups by distance/direction ---
-grouped['Grouper_ID'] = grouped['Suggested_ID'].astype(str)
 
+
+
+# --- Validate suggested groups by distance/direction ---
 for group_id in grouped['Suggested_ID'].unique():
     members = grouped[grouped['Suggested_ID'] == group_id]
 
@@ -568,6 +668,63 @@ grouped.loc[
 ] = '0'
 
 
+# --- Reorder singletons based on similarity to closest larger group ---
+from collections import defaultdict
+import numpy as np
+import time
+
+start_time = time.time()
+print("Identifying singleton placements...")
+
+group_id_to_indices = defaultdict(list)
+for idx, gid in enumerate(grouped['Grouper_ID']):
+    group_id_to_indices[gid].append(idx)
+
+# Count how many rows belong to each base group (before .01, .02 suffixes)
+base_group_counts = grouped['Grouper_ID'].apply(lambda x: str(x).split('.')[0]).value_counts().to_dict()
+
+# Filter singleton_ids (that are not directionally split)
+singleton_ids = []
+for gid, idxs in group_id_to_indices.items():
+    if len(idxs) != 1:
+        continue  # Not a singleton
+
+    match = re.match(r'^(\d+)\.\d+$', str(gid))
+    if match:
+        base_id = match.group(1)
+        if base_group_counts.get(base_id, 0) > 1:
+            continue  # It's a directional split — skip it
+
+    singleton_ids.append(gid)
+
+# Now define non-singleton_ids AFTER filtering valid singleton_ids
+non_singleton_ids = [gid for gid in group_id_to_indices if gid not in singleton_ids]
+
+MIN_SINGLETON_SIMILARITY = 0.80
+singleton_inserts = {}
+for singleton_id in singleton_ids:
+    singleton_idx = group_id_to_indices[singleton_id][0]
+    best_score = -1
+    best_match_id = None
+
+    for gid in non_singleton_ids:
+        group_idxs = group_id_to_indices[gid]
+        max_sim = max(similarity[singleton_idx, other_idx] for other_idx in group_idxs)
+
+        if max_sim > best_score:
+            best_score = max_sim
+            best_match_id = gid
+
+    if best_score >= MIN_SINGLETON_SIMILARITY:
+        singleton_inserts[singleton_id] = best_match_id
+
+print(f"Placed {len(singleton_inserts)} of {len(singleton_ids)} singleton groups based on similarity ≥ {MIN_SINGLETON_SIMILARITY}.")
+print(f"Completed in {time.time() - start_time:.2f} seconds.")
+
+
+
+
+
 # --- Merge back ---
 output_df = df.merge(
     grouped[[grouping_field, 'Grouper_ID', 'normalized_locality']],
@@ -595,7 +752,17 @@ def sort_key(val):
         return (float('inf'), float('inf'))
 
 export_df = grouped[columns_to_export].drop_duplicates()
-export_df = export_df.sort_values(by='Grouper_ID', key=lambda col: col.map(sort_key))
+def grouper_sort_key(gid):
+    if gid in singleton_inserts:
+        anchor_gid = singleton_inserts[gid]
+        anchor_tuple = sort_key(anchor_gid)
+        singleton_weight = 0.5  # Ensure it's placed *after* the anchor
+        return (anchor_tuple[0], anchor_tuple[1] + singleton_weight)
+    else:
+        return sort_key(gid)
+
+export_df = export_df.sort_values(by='Grouper_ID', key=lambda col: col.map(grouper_sort_key))
+
 
 output_file = os.path.splitext(csv_path)[0] + '-key.csv'
 export_df.to_csv(output_file, index=False, encoding='utf-8-sig')
