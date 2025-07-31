@@ -168,6 +168,7 @@ def preprocess(text):
     text = re.sub(r'\bave\.?\b', 'avenue', text, flags=re.IGNORECASE)
     text = re.sub(r'\brt\.?\b', 'route', text, flags=re.IGNORECASE)
     text = re.sub(r'\bdr\.?\b', 'drive', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bblvd\.?\b', 'boulevard', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(\d{1,4}(?:st|nd|rd|th)?)\s+st\.?\b', r'\1 street', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcr\s*(\d+)\b', r'county road \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\brd\.?\b', 'road', text, flags=re.IGNORECASE)
@@ -187,6 +188,7 @@ def preprocess(text):
     text = re.sub(r'\+', 'and', text)
     text = re.sub(r'\bok\b', 'oklahoma', text, flags=re.IGNORECASE)
     text = re.sub(r'\bokla\b', 'oklahoma', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bOKC\b', 'oklahoma city', text, flags=re.IGNORECASE)
     text = re.sub(r'\btx\b', 'texas', text, flags=re.IGNORECASE)
     text = re.sub(r'\bTex\b', 'texas', text, flags=re.IGNORECASE)
     text = re.sub(r'\bar\b', 'arkansas', text, flags=re.IGNORECASE)
@@ -198,6 +200,19 @@ def preprocess(text):
     text = re.sub(r'\bco\b', 'county', text, flags=re.IGNORECASE)
     #remove word before "county" but not if it's "county road"
     text = re.sub(r'\b(?!road\b)\w+\s+county\b', '', text, flags=re.IGNORECASE)
+
+    # --- Convert spelled-out ordinals like "tenth" to "10th" ---
+    ordinal_words = {
+        'first': '1st', 'second': '2nd', 'third': '3rd', 'fourth': '4th',
+        'fifth': '5th', 'sixth': '6th', 'seventh': '7th', 'eighth': '8th',
+        'ninth': '9th', 'tenth': '10th', 'eleventh': '11th', 'twelfth': '12th',
+        'thirteenth': '13th', 'fourteenth': '14th', 'fifteenth': '15th',
+        'sixteenth': '16th', 'seventeenth': '17th', 'eighteenth': '18th',
+        'nineteenth': '19th', 'twentieth': '20th'
+    }
+
+    for word, ordinal in ordinal_words.items():
+        text = re.sub(rf'\b{word}\b', ordinal, text, flags=re.IGNORECASE)
 
     # --- Convert spelled-out numbers before miles to digits ---
     number_words = {
@@ -466,8 +481,10 @@ vocab_keys = list(vocab.keys())
 protected_tokens = set([
     "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
     "northern", "southern", "eastern", "western", "central",
-    "first", "second", "third", "fourth", "fifth", "sixth",
-    "seventh", "eighth", "ninth", "tenth"
+    "1st", "2nd", "3rd", "4th", "5th", "6th",
+    "7th", "8th", "9th", "10th", "11th", "12th",
+    "13th", "14th", "15th", "16th", "17th", "18th",
+    "19th", "20th"
 ])
 merged = {}
 
@@ -486,6 +503,7 @@ township_pattern = r'^[trs]\d{1,3}[nsew]?$'
 for i in range(len(vocab_keys)):
     token_i = vocab_keys[i]
 
+    # Skip token_i if it's a digit, protected, or already merged
     if (
         token_i.replace(".", "").isdigit()
         or token_i in protected_tokens
@@ -501,9 +519,9 @@ for i in range(len(vocab_keys)):
     for j in range(i + 1, len(vocab_keys)):
         token_j = vocab_keys[j]
 
+        # Skip token_j if it's a digit or already merged — but NOT if it's protected
         if (
             token_j.replace(".", "").isdigit()
-            or token_j in protected_tokens
             or token_j in merged
         ):
             continue
@@ -533,11 +551,13 @@ for i in range(len(vocab_keys)):
             else:
                 continue
 
-            if other in merged:
+            # Prevent overriding protected tokens as aliases
+            if other in protected_tokens or other in merged:
                 continue
 
-            print(f"Aliasing '{other}' ({token_freq[other]}) to '{canonical}' ({token_freq[canonical]}) (score {score:.2f} >= {threshold:.2f})")
+            print(f"Aliasing '{other}' ({token_freq.get(other, 0)}) to '{canonical}' ({token_freq.get(canonical, 0)}) (score {score:.2f} ≥ {threshold:.2f})")
             merged[other] = canonical
+
 
 # --- Apply alias substitutions into normalized locality ---
 def apply_aliases(text, alias_map):
