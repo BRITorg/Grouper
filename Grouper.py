@@ -5,6 +5,7 @@ import warnings
 from rapidfuzz import fuzz
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from rapidfuzz import process
 
 warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None'")
 
@@ -17,6 +18,34 @@ def preprocess(text):
 
     # Replace all Unicode space-like characters with a normal space
     text = re.sub(r'[\u00A0\u2000-\u200B\u202F\u205F\u3000]', ' ', text)
+
+    # Remove pound/hash symbols
+    text = text.replace('#', '')
+    
+    # Words and phrases to remove
+    REMOVE_TERMS = [
+        r'\bu\.?\s*s\.?\s*a\.?\b',  # USA, U.S.A., etc.
+        r'\bverbatim\b',
+        r'\[?\s*no additional locality data on sheet\s*\]?',
+        r'\[?\s*no additional data\s*\]?',
+        r'\[?\s*locality not indicated\s*\]?',
+        r'\[?\s*not readable\s*\]?',
+        r'\[?\s*illegible\s*\]?',
+        r'\[?\s*none\s*\]?',
+        r'\[?\s*unspecified\s*\]?',
+        r'\[?\s*no location data on label\s*\]?',
+        r'\bno locality\b',
+        r'\bnone listed\b',
+        r'\bno further locality\b',
+        r'\bno location\b',
+        r'\b(?:about|ca\.?)\s+',  # Approximate qualifiers
+        r'(^\s*(coll\.?|collected|found)\b[\s,:-]*|\b(collected|found)\s+(from|in|at|on|along|near)\b)'
+    ]
+
+    for pattern in REMOVE_TERMS:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+
 
     # --- Remove repeated locality prefix before semicolon if repeated later "Oklahoma City; near county line on W 10th street, Oklahoma City"---
     if ";" in text:
@@ -78,39 +107,16 @@ def preprocess(text):
     # Normalize bare US highway numbers like "US 10", "U.S. 10", "U. S. 10"
     text = re.sub(r'\bu\.?\s*s\.?\s*(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bus\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
-    # --- Catch generic references to U.S. highways without numbers ---
+    # Catch generic references to U.S. highways without numbers ---
     text = re.sub(r'\b(u\.?\s*s\.?|us|ush)\s+(highway|hwy)\b', 'highway', text, flags=re.IGNORECASE)
     # Normalize Interstate variants like "I-40", "I 40", "I. 40", "Interstate 40" → "highway 40"
     text = re.sub(r'\binterstate\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bi[\.\-\s]?(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
+    # Normalize FM to farm-to-market
+    text = re.sub(r'\bf[\.\s]*m[\.\s]*(road)?[\s\.]*#?(\d+)\b',r'farm-to-market \2', text, flags=re.IGNORECASE)
 
-    # Remove "U.S.A.", "USA", "U. S. A.", etc.
-    text = re.sub(r'\bu\.?\s*s\.?\s*a\.?\b', '', text, flags=re.IGNORECASE)
-
-    from rapidfuzz import process
-
-    # --- Normalize direction-of abbreviations like "Nof", "NEof", etc. ---
-    dir_abbr_to_phrase = {
-        'nof': 'north of',
-        'sof': 'south of',
-        'eof': 'east of',
-        'wof': 'west of',
-        'neof': 'northeast of',
-        'nwof': 'northwest of',
-        'seof': 'southeast of',
-        'swof': 'southwest of',
-        'nneof': 'north-northeast of',
-        'nnwof': 'north-northwest of',
-        'eseof': 'east-southeast of',
-        'eneof': 'east-northeast of',
-        'sseof': 'south-southeast of',
-        'sswof': 'south-southwest of',
-        'wswof': 'west-southwest of',
-        'wnwof': 'west-northwest of'
-    }
-    
-    for abbr, full in dir_abbr_to_phrase.items():
-        text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
+    # --- Split glued compass direction + "of" (e.g., " nof," → " n of,") ---
+    text = re.sub(r'(?<=\s)([nswe]{1,3})of(?=[\s\.,:;!?])', r'\1 of', text, flags=re.IGNORECASE)
 
     # --- Normalize compound compass directions ---
     text = re.sub(r'(?<!\w)[nN][\.\s]?[eE](?!\w)', 'northeast', text)
@@ -161,8 +167,6 @@ def preprocess(text):
         text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
 
     # Fuzzy-correct direction typos after normalization
-    from rapidfuzz import process
-    
     DIRECTION_TERMS = [
         'north', 'south', 'east', 'west',
         'northeast', 'northwest', 'southeast', 'southwest',
@@ -172,6 +176,7 @@ def preprocess(text):
         'west-northwest', 'west-southwest'
     ]
     FUZZY_DIR_THRESHOLD = 90
+
     
     def correct_direction_typos(text):
         tokens = text.split()
@@ -187,44 +192,49 @@ def preprocess(text):
     text = correct_direction_typos(text)
 
     # --- Common abbreviation replacements ---
-    text = re.sub(r'\bjct\b', 'junction', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bst\.?\b', 'street', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bcir\.?\b', 'circle', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bave\.?\b', 'avenue', text, flags=re.IGNORECASE)
-    text = re.sub(r'\brt\.?\b', 'route', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bdr\.?\b', 'drive', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bblvd\.?\b', 'boulevard', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(\d{1,4}(?:st|nd|rd|th)?)\s+st\.?\b', r'\1 street', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bcr\s*(\d+)\b', r'county road \1', text, flags=re.IGNORECASE)
-    text = re.sub(r'\brd\.?\b', 'road', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bhwy\.?\b', 'highway', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bmt\.?\b', 'mountain', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bmtn\.?\b', 'mountain', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bmts\.?\b', 'mountains', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bmtns\.?\b', 'mountains', text, flags=re.IGNORECASE)
-    text = re.sub(r'\br[\.\-\s]?r[\.\-]?(?=\W|$)', 'railroad', text, flags=re.IGNORECASE)
-    text = re.sub(r'\br\.(?=\W|$)', 'river', text, flags=re.IGNORECASE)
-    text = re.sub(r'\briv\.(?=\W|$)', 'river', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bmi\b', 'miles', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bft\.?\b', 'fort', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bcp\.?\b', 'camp', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s+x\s+', ' ', text)
-    text = re.sub(r'&', 'and', text)
-    text = re.sub(r'\+', 'and', text)
-    text = re.sub(r'\bok\b', 'oklahoma', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bokla\b', 'oklahoma', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bOKC\b', 'oklahoma city', text, flags=re.IGNORECASE)
-    text = re.sub(r'\btx\b', 'texas', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bTex\b', 'texas', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bar\b', 'arkansas', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bark\b', 'arkansas', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bcoll\.?\b', 'collected', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bWMA\.?\b', 'wildlife management area', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bNRA\.?\b', 'national recreation area', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bco\.\b', 'county', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bco\b', 'county', text, flags=re.IGNORECASE)
-    #remove word before "county" but not if it's "county road"
-    text = re.sub(r'\b(?!road\b)\w+\s+county\b', '', text, flags=re.IGNORECASE)
+    ABBREVIATIONS = {
+        r'\bjct\b': 'junction',
+        r'\bint\b': 'intersection',
+        r'\b(\d{1,4}(?:st|nd|rd|th)?)\s+st\.?\b': r'\1 street',  # "3rd st" → "3rd street"
+        r'\bst\.?\b': 'street',
+        r'\bcir\.?\b': 'circle',
+        r'\bave\.?\b': 'avenue',
+        r'\brt\.?\b': 'route',
+        r'\bdr\.?\b': 'drive',
+        r'\bblvd\.?\b': 'boulevard',
+        r'\bcr\s*(\d+)\b': r'county road \1', # "cr 123" → "county road 123"
+        r'\brd\.?\b': 'road',
+        r'\bhwy\.?\b': 'highway',
+        r'\bmt\.?\b': 'mountain',
+        r'\bmtn\.?\b': 'mountain',
+        r'\bmts\.?\b': 'mountains',
+        r'\bmtns\.?\b': 'mountains',
+        r'\br[\.\-\s]?r[\.\-]?(?=\W|$)': 'railroad',  # Matches "rr", "r.r", "r-r", "r r", etc. at word end → "railroad"
+        r'\br\.(?=\W|$)': 'river',    # Matches "r." or "riv." → "river"
+        r'\briv\.(?=\W|$)': 'river',
+        r'\bmi\b': 'miles',
+        r'\bft\.?\b': 'fort',
+        r'\bcp\.?\b': 'camp',
+        r'\bbldg\.?\b': 'building',
+        r'\s+x\s+': ' ',   # Clean "x" as a separator like "5 x 10" → "5 10"
+        r'&': 'and',  # Symbol replacements
+        r'\+': 'and',
+        r'\bok\b': 'oklahoma',
+        r'\bokla\b': 'oklahoma',
+        r'\bOKC\b': 'oklahoma city',
+        r'\btx\b': 'texas',
+        r'\bTex\b': 'texas',
+        r'\bar\b': 'arkansas',
+        r'\bark\b': 'arkansas',
+        r'\bwma\.?\b': 'wildlife management area',
+        r'\bnra\.?\b': 'national recreation area',
+        r'\bco\.\b': 'county',
+        r'\bco\b': 'county'
+    }
+    
+    # Apply all abbreviation replacements
+    for pattern, replacement in ABBREVIATIONS.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
     # --- Convert spelled-out ordinals like "tenth" to "10th" ---
     ordinal_words = {
@@ -241,27 +251,13 @@ def preprocess(text):
 
     # --- Convert spelled-out numbers before miles to digits ---
     number_words = {
-        'one': '1',
-        'two': '2',
-        'three': '3',
-        'four': '4',
-        'five': '5',
-        'six': '6',
-        'seven': '7',
-        'eight': '8',
-        'nine': '9',
-        'ten': '10',
-        'eleven': '11',
-        'twelve': '12',
-        'thirteen': '13',
-        'fourteen': '14',
-        'fifteen': '15',
-        'sixteen': '16',
-        'seventeen': '17',
-        'eighteen': '18',
-        'nineteen': '19',
-        'twenty': '20'
+        'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+        'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+        'eleven': '11', 'twelve': '12', 'thirteen': '13', 'fourteen': '14',
+        'fifteen': '15', 'sixteen': '16', 'seventeen': '17', 'eighteen': '18',
+        'nineteen': '19', 'twenty': '20'
     }
+
 
     # --- Replace spelled-out numbers with digits only when followed by distance units or directional words using a lookahead pattern ---
     directions = [
@@ -350,29 +346,6 @@ def preprocess(text):
         text,
         flags=re.IGNORECASE
     )
-
-
-    # --- Remove approximate qualifiers like "ca", "ca.", or "about" with punctuation ---
-    text = re.sub(r'\b(?:about|ca\.?)\s+', '', text, flags=re.IGNORECASE)
-    
-    # --- Remove trailing periods from known words ---
-    text = re.sub(r'\b(miles|north|south|east|west|northeast|northwest|southeast|southwest)\.', r'\1', text)
-
-    # Remove "collected from, in, at, on, etc."
-    text = re.sub(r'\bcollected\s+(from|in|at|on|along)\b', '', text, flags=re.IGNORECASE)
-    # Remove "collected" solo at the beginning
-    text = re.sub(r'^\s*collected\b[\s,:-]*', '', text, flags=re.IGNORECASE)
-
-    # Remove trailing periods from the entire string
-    text = re.sub(r'\.\s*$', '', text)
-
-    # Remove pound/hash symbols
-    text = text.replace('#', '')
-
-    # Remove "Verbatim", "no additional locality" variations
-    text = re.sub(r'[\(\[]\s*verbatim\s*[\)\]]', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\[\s*no additional locality data on sheet\s*\]', '', text, flags=re.IGNORECASE)
-
 
     # --- Normalize patterns like "6mi.E." or "5kmW" → "6 miles east" ---
     text = re.sub(
@@ -485,6 +458,7 @@ def custom_tokenizer(text):
 custom_stop_words = [
     'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of', 'or', 'but', 'from', 'between', 'along',
     'texas', 'oklahoma', 
+    'junction', 'intersection',
     'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', 'bed', 'bank'
     'x'
 ]
