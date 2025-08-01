@@ -18,7 +18,7 @@ def preprocess(text):
     # Replace all Unicode space-like characters with a normal space
     text = re.sub(r'[\u00A0\u2000-\u200B\u202F\u205F\u3000]', ' ', text)
 
-    # --- Remove repeated locality prefix before semicolon if repeated later ---
+    # --- Remove repeated locality prefix before semicolon if repeated later "Oklahoma City; near county line on W 10th street, Oklahoma City"---
     if ";" in text:
         prefix, rest = text.split(";", 1)
         prefix = prefix.strip()
@@ -32,13 +32,11 @@ def preprocess(text):
     text = re.sub(r'\bmis\.?\b', ' miles ', text, flags=re.IGNORECASE)
     text = re.sub(r'\bmi\.?\b', ' miles ', text, flags=re.IGNORECASE)
 
-    # --- Normalize "km" to " kilometers "
+    # --- Normalize "km" to " kilometers " and "'" to " feet "
     text = re.sub(r'\bkm\.?\b', ' kilometers ', text, flags=re.IGNORECASE)
     text = re.sub(r"(\d+)\s*['’]", r"\1 feet", text)
 
-    # Normalize feet and meters
-    text = re.sub(r'\s+', ' ', text)
-    # change " m " to meters if preceding number is above 20, miles if below 20
+     # change " m " to meters if preceding number is above 20, miles if below 20
     def convert_m_unit(match):
         num = float(match.group(1))
         unit = "meters" if num > 20 else "miles"
@@ -47,10 +45,11 @@ def preprocess(text):
     # Handles glued and spaced versions like "100m" and "100 m"
     text = re.sub(r'\b(\d+(?:\.\d+)?)\s*m\b', convert_m_unit, text, flags=re.IGNORECASE)
 
-
     # Insert a space between numbers and units if stuck together (e.g., "5miles" → "5 miles")
     text = re.sub(r'(\d+(?:\.\d+)?)(?=\s*?(miles|mile|km|kilometers|kilometer|mi|ft|feet))', r'\1 ', text, flags=re.IGNORECASE)
 
+    # --- Force singular "mile" to plural "miles" ---
+    text = re.sub(r'\bmile\b', 'miles', text, flags=re.IGNORECASE)
 
     # --- Normalize all forms of 'state highway' ---
     text = re.sub(r'\bstate\s+highway\s+(\d+)\b', r'highway \1', text, flags=re.IGNORECASE)
@@ -90,27 +89,28 @@ def preprocess(text):
 
     from rapidfuzz import process
 
-    # Define canonical directions and a score threshold
-    DIRECTION_TERMS = [
-        'north', 'south', 'east', 'west',
-        'northeast', 'northwest', 'southeast', 'southwest',
-        'north-northeast', 'north-northwest',
-        'south-southeast', 'south-southwest',
-        'east-northeast', 'east-southeast',
-        'west-northwest', 'west-southwest'
-    ]
-    FUZZY_DIR_THRESHOLD = 90  # Adjust as needed
+    # --- Normalize direction-of abbreviations like "Nof", "NEof", etc. ---
+    dir_abbr_to_phrase = {
+        'nof': 'north of',
+        'sof': 'south of',
+        'eof': 'east of',
+        'wof': 'west of',
+        'neof': 'northeast of',
+        'nwof': 'northwest of',
+        'seof': 'southeast of',
+        'swof': 'southwest of',
+        'nneof': 'north-northeast of',
+        'nnwof': 'north-northwest of',
+        'eseof': 'east-southeast of',
+        'eneof': 'east-northeast of',
+        'sseof': 'south-southeast of',
+        'sswof': 'south-southwest of',
+        'wswof': 'west-southwest of',
+        'wnwof': 'west-northwest of'
+    }
     
-    def correct_direction_typos(text):
-        tokens = text.split()
-        corrected = []
-        for tok in tokens:
-            match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
-            if score >= FUZZY_DIR_THRESHOLD:
-                corrected.append(match)
-            else:
-                corrected.append(tok)
-        return ' '.join(corrected)
+    for abbr, full in dir_abbr_to_phrase.items():
+        text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
 
     # --- Normalize compound compass directions ---
     text = re.sub(r'(?<!\w)[nN][\.\s]?[eE](?!\w)', 'northeast', text)
@@ -160,6 +160,31 @@ def preprocess(text):
     for abbr, full in abbr_map.items():
         text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
 
+    # Fuzzy-correct direction typos after normalization
+    from rapidfuzz import process
+    
+    DIRECTION_TERMS = [
+        'north', 'south', 'east', 'west',
+        'northeast', 'northwest', 'southeast', 'southwest',
+        'north-northeast', 'north-northwest',
+        'south-southeast', 'south-southwest',
+        'east-northeast', 'east-southeast',
+        'west-northwest', 'west-southwest'
+    ]
+    FUZZY_DIR_THRESHOLD = 90
+    
+    def correct_direction_typos(text):
+        tokens = text.split()
+        corrected = []
+        for tok in tokens:
+            match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
+            if score >= FUZZY_DIR_THRESHOLD:
+                corrected.append(match)
+            else:
+                corrected.append(tok)
+        return ' '.join(corrected)
+    
+    text = correct_direction_typos(text)
 
     # --- Common abbreviation replacements ---
     text = re.sub(r'\bjct\b', 'junction', text, flags=re.IGNORECASE)
@@ -238,6 +263,7 @@ def preprocess(text):
         'twenty': '20'
     }
 
+    # --- Replace spelled-out numbers with digits only when followed by distance units or directional words using a lookahead pattern ---
     directions = [
             'north', 'south', 'east', 'west',
             'northeast', 'northwest', 'southeast', 'southwest',
@@ -325,8 +351,6 @@ def preprocess(text):
         flags=re.IGNORECASE
     )
 
-    # --- Force singular "mile" to plural "miles" ---
-    text = re.sub(r'\bmile\b', 'miles', text, flags=re.IGNORECASE)
 
     # --- Remove approximate qualifiers like "ca", "ca.", or "about" with punctuation ---
     text = re.sub(r'\b(?:about|ca\.?)\s+', '', text, flags=re.IGNORECASE)
@@ -366,6 +390,7 @@ def preprocess(text):
 
     # Remove all punctuation except for periods used in decimal numbers
     text = re.sub(r'(?<!\d)\.(?!\d)', ' ', text)  # remove periods not part of decimal numbers
+
     # Preserve hyphens within known compound directions before stripping punctuation
     DIRECTION_COMPOUNDS = [
         'north-northeast', 'north-northwest', 'south-southeast', 'south-southwest',
@@ -381,7 +406,6 @@ def preprocess(text):
     
     # Restore hyphens
     text = text.replace('___', '-')
-
 
     # --- Normalize whitespace ---
     text = re.sub(r'\s+', ' ', text)
