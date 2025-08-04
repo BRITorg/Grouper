@@ -10,7 +10,7 @@ function onOpen() {
 
   const OriginalMenu = ui.createMenu('Original Sheet Tools')
     .addItem('Populate Blank Catalog Numbers', 'fillBlankCatalogNumbers')
-    .addItem('Populate Final Name from Key', 'fillFinalNameFormulas');
+    .addItem('Populate Grouper_id from Key', 'fillFinalNameFormulas');
 
   const ToCogeMenu = ui.createMenu('To CoGe Export Tools')
     .addItem('Export CSV(s) for CoGe', 'exportCSVsByCounty')
