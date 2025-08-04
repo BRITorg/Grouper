@@ -39,6 +39,7 @@ def preprocess(text):
         r'\bno further locality\b',
         r'\bno location\b',
         r'\b(?:about|ca\.?)\s+',  # Approximate qualifiers
+        r'\(air\)',  # ← this line removes (air)
         r'(^\s*(coll\.?|collected|found)\b[\s,:-]*|\b(collected|found)\s+(from|in|at|on|along|near)\b)'
     ]
 
@@ -388,30 +389,73 @@ def preprocess(text):
 # --- Extract distances and directions ---
 def extract_distance_direction(text):
     """
-    Extracts (distance, direction, unit) from phrases like:
-    '125 meters east, 0.35 miles south, 40 feet west'
+    Extracts (distance, direction, unit) tuples from text.
+    Primary extraction expects normalized input like:
+        '125 meters east', '0.35 miles south', '40 feet west'
+
+    Also handles fallback patterns where distance and direction appear out of order,
+    e.g., 'northwest of town 9 miles' or '9 miles northwest of town'
     """
+
     if pd.isnull(text):
         return []
 
-    # Expecting normalized units only: miles, kilometers, meters, feet
+    # --- Main extraction pattern ---
+    # Match number + optional unit + direction in order
+    # Example matches: '5 miles north', '3.5 kilometers southwest'
     pattern = re.compile(
-        r'(\d+(?:\.\d+)?)\s*(miles|kilometers|meters|feet)?[\s,]*(north|south|east|west|northeast|northwest|southeast|southwest)\b',
+        r'(\d+(?:\.\d+)?)\s*'                           # Number (with optional decimal)
+        r'(miles|kilometers|meters|feet)?[\s,]*'        # Optional unit
+        r'(north|south|east|west|'                      # Direction (simple and compound)
+        r'northeast|northwest|southeast|southwest)\b',
         flags=re.IGNORECASE
     )
 
     matches = pattern.findall(text)
     results = []
+
+    # --- Format and normalize the matched results ---
     for number, unit, direction in matches:
         num = float(number)
         if num.is_integer():
-            num = int(num)
-        unit = unit.lower() if unit else ''
-        results.append((str(num), direction.lower(), unit))
+            num = int(num)  # Convert to int if it's a whole number (e.g., 5.0 → 5)
+        unit = unit.lower() if unit else ''  # Normalize unit (e.g., 'Miles' → 'miles')
+        results.append((str(num), direction.lower(), unit))  # Lowercase for consistency
 
-    # Sort by direction then distance
-    results.sort(key=lambda x: (x[1], float(x[0])))
-    return results
+    # --- If matches found, return them sorted by direction and then distance ---
+    if results:
+        results.sort(key=lambda x: (x[1], float(x[0])))
+        return results
+
+    # --- Fallback logic (if no standard pattern was matched) ---
+    # Try to detect *exactly one* number+unit and *exactly one* direction in any order
+
+    # Find first occurrence of a number + unit (e.g., "9 miles")
+    fallback_number = re.search(
+        r'\b(\d+(?:\.\d+)?)\s*(miles|kilometers|meters|feet)\b',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Find first occurrence of a direction (e.g., "northwest")
+    fallback_direction = re.search(
+        r'\b(north|south|east|west|northeast|northwest|southeast|southwest)\b',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # If both are found, assume this is a valid out-of-order distance-direction pair
+    if fallback_number and fallback_direction:
+        number = float(fallback_number.group(1))
+        if number.is_integer():
+            number = int(number)
+        unit = fallback_number.group(2).lower()
+        direction = fallback_direction.group(1).lower()
+        return [(str(number), direction, unit)]
+
+    # If nothing found, return empty list
+    return []
+
 
 # --- Prompt for file ---
 csv_path = input("Enter path to CSV or TSV file: ").strip()
@@ -440,7 +484,7 @@ if 'locality' not in df.columns or grouping_field not in df.columns:
 grouped = df.drop_duplicates(subset=grouping_field).copy()
 grouped = grouped.reset_index(drop=True)
 grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
-grouped['distance_direction'] = grouped['normalized_locality'].apply(extract_distance_direction)
+grouped['distance_direction'] = grouped['normalized_locality'].str.replace('*', '', regex=False).apply(extract_distance_direction)
 
 # --- TF-IDF setup ---
 important_phrases = [
@@ -739,9 +783,10 @@ for singleton_id in singleton_ids:
 print(f"Placed {len(singleton_inserts)} of {len(singleton_ids)} singleton groups based on similarity ≥ {MIN_SINGLETON_SIMILARITY}.")
 print(f"Completed in {time.time() - start_time:.2f} seconds.")
 
-
-
-
+# --- Convert extracted distance_direction tuples to readable string ---
+grouped['Distance_Direction'] = grouped['distance_direction'].apply(
+    lambda lst: '; '.join([f"{d} {u} {dir}" if u else f"{d} {dir}" for d, dir, u in lst]) if lst else ''
+)
 
 # --- Merge back ---
 output_df = df.merge(
@@ -753,8 +798,10 @@ output_df = df.merge(
 # --- Export ---
 columns_to_export = [
     'catalogNumber', 'institutionCode', 'collectionCode', 'county',
-    'locality', 'bels_location_id', 'Grouper_ID', 'normalized_locality', 'Confidence'
+    'locality', 'bels_location_id', 'Grouper_ID', 'normalized_locality', 'Confidence',
+    'Distance_Direction'
 ]
+
 # For consistent columns, protect against missing
 columns_to_export = [col for col in columns_to_export if col in grouped.columns]
 
