@@ -167,32 +167,33 @@ def preprocess(text):
     for abbr, full in abbr_map.items():
         text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
 
-    # Fuzzy-correct direction typos after normalization
-    DIRECTION_TERMS = [
-        'north', 'south', 'east', 'west',
-        'northeast', 'northwest', 'southeast', 'southwest',
-        'north-northeast', 'north-northwest',
-        'south-southeast', 'south-southwest',
-        'east-northeast', 'east-southeast',
-        'west-northwest', 'west-southwest'
-    ]
-    FUZZY_DIR_THRESHOLD = 90
-
-    
-    def correct_direction_typos(text):
-        tokens = text.split()
-        corrected = []
-        for tok in tokens:
-            match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
-            if score >= FUZZY_DIR_THRESHOLD:
-                corrected.append(match)
-            else:
-                corrected.append(tok)
-        return ' '.join(corrected)
-    
-    text = correct_direction_typos(text)
+    # Fuzzy-correct direction typos after normalization (Commented out cause it is more trouble than its worth.)
+    #DIRECTION_TERMS = [
+    #    'north', 'south', 'east', 'west',
+    #    'northeast', 'northwest', 'southeast', 'southwest',
+    #    'north-northeast', 'north-northwest',
+    #    'south-southeast', 'south-southwest',
+    #    'east-northeast', 'east-southeast',
+    #    'west-northwest', 'west-southwest'
+    #]
+    #FUZZY_DIR_THRESHOLD = 90
+#
+    #
+    #def correct_direction_typos(text):
+    #    tokens = text.split()
+    #    corrected = []
+    #    for tok in tokens:
+    #        match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
+    #        if score >= FUZZY_DIR_THRESHOLD:
+    #            corrected.append(match)
+    #        else:
+    #            corrected.append(tok)
+    #    return ' '.join(corrected)
+    #
+    #text = correct_direction_typos(text)
 
     # --- Common abbreviation replacements ---
+    
     ABBREVIATIONS = {
         r'\bjct\b': 'junction',
         r'\bint\b': 'intersection',
