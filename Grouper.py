@@ -2,18 +2,14 @@ import pandas as pd
 import re
 import os
 import warnings
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from rapidfuzz import process
 from collections import defaultdict
 import time
 
 warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None'")
 
-grouping_field = "bels_location_id"
-
-# --- Preprocessing ---
 
 def preprocess(text):
     """normalize, and apply regex modifications to locality text"""
@@ -194,8 +190,8 @@ def preprocess(text):
         r'\bcp\.?\b': 'camp',
         r'\bbldg\.?\b': 'building',
         r'\s+x\s+': ' ',   # Clean "x" as a separator like "5 x 10" → "5 10"
-        r'&': 'and',  # Symbol replacements
-        r'\+': 'and',
+        r'&': ' and ',  # Symbol replacements
+        r'\+': ' and ',
         r'\bok\b': 'oklahoma',
         r'\bokla\b': 'oklahoma',
         r'\bOKC\b': 'oklahoma city',
@@ -363,6 +359,7 @@ def preprocess(text):
 
 
 def convert_m_unit(match):
+    """converts m. into meters or miles """
     num = float(match.group(1))
     unit = "meters" if num > 20 else "miles"
     return f"{int(num) if num.is_integer() else num} {unit}"
@@ -382,7 +379,8 @@ def normalize_matched_direction(matches):
 
 
 def fallback_direction(text):
-    """fallback logic for extracting distance and direction.
+    """
+        fallback logic for extracting distance and direction.
         Try to detect *exactly one* number+unit and *exactly one* direction in any order
         Find first occurrence of a number + unit (e.g., "9 miles").
         returns:
@@ -459,7 +457,9 @@ def extract_distance_direction(text):
     # If nothing found, return empty list
     return []
 
-def load_input_csv():
+
+def load_input_csv(grouping_field):
+    """Loads in either csv or tsv path and checks required columns"""
     csv_path = input("Enter path to CSV or TSV file: ").strip()
     if not os.path.isfile(csv_path):
         print("File not found.")
@@ -481,8 +481,10 @@ def load_input_csv():
     return df, sep, csv_path
 
 def preprocess_localities(df, grouping_field):
-    """applies the preprocess and extract_distance_direction steps to localities
-        and returns grouped dataframe"""
+    """
+        applies the preprocess and extract_distance_direction steps to localities
+        and returns grouped dataframe
+    """
     grouped = df.drop_duplicates(subset=grouping_field).copy()
     grouped = grouped.reset_index(drop=True)
     grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
@@ -495,6 +497,7 @@ def preprocess_localities(df, grouping_field):
 # --- TF-IDF setup ---
 
 def custom_tokenizer(text):
+    """Tokenizer that retains numbers, decimals, and words."""
     # Remove all punctuation except periods in numbers (e.g., 3.5)
     text = re.sub(r'[^\w\s.]', '', text)
     # Tokenize on words and decimal numbers
@@ -511,7 +514,9 @@ def get_custom_stop_words():
     ]
 
 def get_important_phrases():
-    """important phrases for directional tokenization"""
+    """
+    important phrases for directional tokenization
+    """
     return [
         'north', 'south', 'east', 'west',
         'northeast', 'northwest', 'southeast', 'southwest'
@@ -553,7 +558,7 @@ def fuzzy_alias_tokens(id_matrix, vectorizer):
     """
      Identifies and merges similar tokens using fuzzy matching on the TF-IDF vocabulary.
      Protects directional, ordinal, township codes, and key adjectives.
-     """
+    """
     vocab = vectorizer.vocabulary_
 
     token_freq = {token: id_matrix[:, idx].nnz for token, idx in vocab.items()}  # document frequency
@@ -896,7 +901,7 @@ def grouper_main():
     grouping_field = "bels_location_id"
 
     # 1) read in input csv
-    df, sep, csv_path = load_input_csv()
+    df, sep, csv_path = load_input_csv(grouping_field)
 
     # 2) reprocess + extract distance/direction on unique rows
     grouped = preprocess_localities(df, grouping_field)
