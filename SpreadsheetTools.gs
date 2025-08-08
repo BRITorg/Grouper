@@ -303,10 +303,15 @@ function fillBlankCatalogNumbers() {
 
   const headers = data[0];
   const catalogCol = headers.indexOf("catalogNumber");
-  const qCol = 16; // Column Q is index 16 (0-based)
+  const idCol = headers.indexOf("id");
 
   if (catalogCol === -1) {
     SpreadsheetApp.getUi().alert('The column "catalogNumber" was not found.');
+    return;
+  }
+
+  if (idCol === -1) {
+    SpreadsheetApp.getUi().alert('The column "id" was not found.');
     return;
   }
 
@@ -314,11 +319,11 @@ function fillBlankCatalogNumbers() {
 
   for (let i = 1; i < data.length; i++) {
     const catalogVal = data[i][catalogCol];
-    const qVal = data[i][qCol];
+    const idVal = data[i][idCol];
 
     if (!catalogVal || catalogVal.toString().trim() === "") {
-      if (qVal !== "" && qVal !== null) {
-        updates.push([i + 1, catalogCol + 1, "ID_" + qVal.toString().trim()]);
+      if (idVal !== "" && idVal !== null) {
+        updates.push([i + 1, catalogCol + 1, "ID_" + idVal.toString().trim()]);
       }
     }
   }
@@ -328,6 +333,7 @@ function fillBlankCatalogNumbers() {
     sheet.getRange(row, col).setValue(value);
   });
 }
+
 
 function fillFinalNameFormulas() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();

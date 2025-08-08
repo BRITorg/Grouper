@@ -14,7 +14,7 @@ COLUMN_ORDER = [
 ]
 
 CREATED_COLUMNS = [
-    "FinalName", "isInstitution",
+    "Grouper_ID", "isInstitution",
     "decimalLatitudeCount", "decimalLongitudeCount", "MOOSH", "InstitutionCount", "REVIEW", "wheresWalter"
 ]
 
@@ -50,7 +50,7 @@ def process_file(file_path):
     df = df[[col for col in COLUMN_ORDER + CREATED_COLUMNS if col in df.columns]]
 
     # Fill formulas
-    df["FinalName"] = pd.NA
+    df["Grouper_ID"] = pd.NA
     try:
         institution_col_letter = colnum_to_excel_col(df.columns.get_loc("institutionCode"))
         df["isInstitution"] = [
@@ -65,7 +65,7 @@ def process_file(file_path):
         all_columns = list(df.columns)
         lat_col = colnum_to_excel_col(all_columns.index("decimalLatitude"))
         lon_col = colnum_to_excel_col(all_columns.index("decimalLongitude"))
-        finalname_col = colnum_to_excel_col(all_columns.index("FinalName"))
+        finalname_col = colnum_to_excel_col(all_columns.index("Grouper_ID"))
         uncertainty_col = colnum_to_excel_col(all_columns.index("coordinateUncertaintyInMeters"))
 
         df["decimalLatitudeCount"] = [
