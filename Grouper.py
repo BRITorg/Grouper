@@ -219,8 +219,8 @@ def preprocess(text):
         r'\bcp\.?\b': 'camp',
         r'\bbldg\.?\b': 'building',
         r'\s+x\s+': ' ',   # Clean "x" as a separator like "5 x 10" → "5 10"
-        r'&': 'and',  # Symbol replacements
-        r'\+': 'and',
+        r'&': ' and ',  # Symbol replacements
+        r'\+': ' and ',
         r'\bok\b': 'oklahoma',
         r'\bokla\b': 'oklahoma',
         r'\bOKC\b': 'oklahoma city',
