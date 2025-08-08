@@ -2,15 +2,17 @@ import pandas as pd
 import re
 import os
 import warnings
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from rapidfuzz import process
+from collections import defaultdict
+import time
 
 warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None'")
 
-# --- Preprocessing ---
+
 def preprocess(text):
+    """normalize, and apply regex modifications to locality text"""
     if pd.isnull(text):
         return ""
 
@@ -47,7 +49,6 @@ def preprocess(text):
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
 
-
     # --- Remove repeated locality prefix before semicolon if repeated later "Oklahoma City; near county line on W 10th street, Oklahoma City"---
     if ";" in text:
         prefix, rest = text.split(";", 1)
@@ -66,12 +67,7 @@ def preprocess(text):
     text = re.sub(r'\bkm\.?\b', ' kilometers ', text, flags=re.IGNORECASE)
     text = re.sub(r"(\d+)\s*['’]", r"\1 feet", text)
 
-     # change " m " to meters if preceding number is above 20, miles if below 20
-    def convert_m_unit(match):
-        num = float(match.group(1))
-        unit = "meters" if num > 20 else "miles"
-        return f"{int(num) if num.is_integer() else num} {unit}"
-    
+
     # Handles glued and spaced versions like "100m" and "100 m"
     text = re.sub(r'\b(\d+(?:\.\d+)?)\s*m\b', convert_m_unit, text, flags=re.IGNORECASE)
 
@@ -167,31 +163,6 @@ def preprocess(text):
     for abbr, full in abbr_map.items():
         text = re.sub(rf'\b{abbr}\b', full, text, flags=re.IGNORECASE)
 
-    # Fuzzy-correct direction typos after normalization (Commented out cause it is more trouble than its worth.)
-    #DIRECTION_TERMS = [
-    #    'north', 'south', 'east', 'west',
-    #    'northeast', 'northwest', 'southeast', 'southwest',
-    #    'north-northeast', 'north-northwest',
-    #    'south-southeast', 'south-southwest',
-    #    'east-northeast', 'east-southeast',
-    #    'west-northwest', 'west-southwest'
-    #]
-    #FUZZY_DIR_THRESHOLD = 90
-#
-    #
-    #def correct_direction_typos(text):
-    #    tokens = text.split()
-    #    corrected = []
-    #    for tok in tokens:
-    #        match, score, _ = process.extractOne(tok, DIRECTION_TERMS)
-    #        if score >= FUZZY_DIR_THRESHOLD:
-    #            corrected.append(match)
-    #        else:
-    #            corrected.append(tok)
-    #    return ' '.join(corrected)
-    #
-    #text = correct_direction_typos(text)
-
     # --- Common abbreviation replacements ---
     
     ABBREVIATIONS = {
@@ -260,7 +231,6 @@ def preprocess(text):
         'nineteen': '19', 'twenty': '20'
     }
 
-
     # --- Replace spelled-out numbers with digits only when followed by distance units or directional words using a lookahead pattern ---
     directions = [
             'north', 'south', 'east', 'west',
@@ -270,8 +240,8 @@ def preprocess(text):
             'east-northeast', 'east-southeast',
             'west-northwest', 'west-southwest'
     ]
-    dir_pattern = '|'.join(directions)
-    
+
+
     units_pattern = r'miles?|kilometers?|km|mi'
     directions_pattern = r'north|south|east|west|northeast|northwest|southeast|southwest'
     
@@ -387,7 +357,61 @@ def preprocess(text):
 
     return text.strip()
 
-# --- Extract distances and directions ---
+
+def convert_m_unit(match):
+    """converts m. into meters or miles """
+    num = float(match.group(1))
+    unit = "meters" if num > 20 else "miles"
+    return f"{int(num) if num.is_integer() else num} {unit}"
+
+
+def normalize_matched_direction(matches):
+    """normalizes units and integers of directions from locality text."""
+    results = []
+    for number, unit, direction in matches:
+        num = float(number)
+        if num.is_integer():
+            num = int(num)  # Convert to int if it's a whole number (e.g., 5.0 → 5)
+        unit = unit.lower() if unit else ''  # Normalize unit (e.g., 'Miles' → 'miles')
+        results.append((str(num), direction.lower(), unit))  # Lowercase for consistency
+
+    return results
+
+
+def fallback_direction(text):
+    """
+        fallback logic for extracting distance and direction.
+        Try to detect *exactly one* number+unit and *exactly one* direction in any order
+        Find first occurrence of a number + unit (e.g., "9 miles").
+        returns:
+            fallback_result: Returns number, direction, unit list of tuples.
+    """
+
+    fallback_number = re.search(
+        r'\b(\d+(?:\.\d+)?)\s*(miles|kilometers|meters|feet)\b',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Find first occurrence of a direction (e.g., "northwest")
+    fallback_direction = re.search(
+        r'\b(north|south|east|west|northeast|northwest|southeast|southwest)\b',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # If both are found, assume this is a valid out-of-order distance-direction pair
+    if fallback_number and fallback_direction:
+        number = float(fallback_number.group(1))
+        if number.is_integer():
+            number = int(number)
+        unit = fallback_number.group(2).lower()
+        direction = fallback_direction.group(1).lower()
+        return [(str(number), direction, unit)]
+    else:
+        return []
+
+
 def extract_distance_direction(text):
     """
     Extracts (distance, direction, unit) tuples from text.
@@ -413,15 +437,9 @@ def extract_distance_direction(text):
     )
 
     matches = pattern.findall(text)
-    results = []
 
-    # --- Format and normalize the matched results ---
-    for number, unit, direction in matches:
-        num = float(number)
-        if num.is_integer():
-            num = int(num)  # Convert to int if it's a whole number (e.g., 5.0 → 5)
-        unit = unit.lower() if unit else ''  # Normalize unit (e.g., 'Miles' → 'miles')
-        results.append((str(num), direction.lower(), unit))  # Lowercase for consistency
+    #normalize matched results
+    results = normalize_matched_direction(matches)
 
     # --- If matches found, return them sorted by direction and then distance ---
     if results:
@@ -429,109 +447,104 @@ def extract_distance_direction(text):
         return results
 
     # --- Fallback logic (if no standard pattern was matched) ---
-    # Try to detect *exactly one* number+unit and *exactly one* direction in any order
+    fall_back_result = fallback_direction(text)
 
-    # Find first occurrence of a number + unit (e.g., "9 miles")
-    fallback_number = re.search(
-        r'\b(\d+(?:\.\d+)?)\s*(miles|kilometers|meters|feet)\b',
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # Find first occurrence of a direction (e.g., "northwest")
-    fallback_direction = re.search(
-        r'\b(north|south|east|west|northeast|northwest|southeast|southwest)\b',
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # If both are found, assume this is a valid out-of-order distance-direction pair
-    if fallback_number and fallback_direction:
-        number = float(fallback_number.group(1))
-        if number.is_integer():
-            number = int(number)
-        unit = fallback_number.group(2).lower()
-        direction = fallback_direction.group(1).lower()
-        return [(str(number), direction, unit)]
+    if len(fall_back_result) == 0:
+        pass
+    else:
+        return fall_back_result
 
     # If nothing found, return empty list
     return []
 
 
-# --- Prompt for file ---
-csv_path = input("Enter path to CSV or TSV file: ").strip()
-if not os.path.isfile(csv_path):
-    print("File not found.")
-    exit()
+def load_input_csv(grouping_field):
+    """Loads in either csv or tsv path and checks required columns"""
+    csv_path = input("Enter path to CSV or TSV file: ").strip()
+    if not os.path.isfile(csv_path):
+        print("File not found.")
+        exit()
 
-ext = os.path.splitext(csv_path)[1].lower()
-if ext == '.tsv':
-    sep = '\t'
-elif ext == '.csv':
-    sep = ','
-else:
-    print("Unsupported file type. Please provide a .csv or .tsv file.")
-    exit()
+    ext = os.path.splitext(csv_path)[1].lower()
+    sep = '\t' if ext == '.tsv' else ',' if ext == '.csv' else None
 
-df = pd.read_csv(csv_path, sep=sep)
+    if sep is None:
+        print("Unsupported file type. Please provide a .csv or .tsv file.")
+        exit()
 
-grouping_field = "bels_location_id"
+    df = pd.read_csv(csv_path, sep=sep)
 
-if 'locality' not in df.columns or grouping_field not in df.columns:
-    print(f"CSV must contain 'locality' and '{grouping_field}' columns.")
-    exit()
+    if 'locality' not in df.columns or grouping_field not in df.columns:
+        print(f"CSV must contain 'locality' and '{grouping_field}' columns.")
+        exit()
 
-# --- Unique localities by grouping field ---
-grouped = df.drop_duplicates(subset=grouping_field).copy()
-grouped = grouped.reset_index(drop=True)
-grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
-grouped['distance_direction'] = grouped['normalized_locality'].str.replace('*', '', regex=False).apply(extract_distance_direction)
+    return df, sep, csv_path
+
+def preprocess_localities(df, grouping_field):
+    """
+        applies the preprocess and extract_distance_direction steps to localities
+        and returns grouped dataframe
+    """
+    grouped = df.drop_duplicates(subset=grouping_field).copy()
+    grouped = grouped.reset_index(drop=True)
+    grouped['normalized_locality'] = grouped['locality'].apply(preprocess)
+    grouped['distance_direction'] = grouped['normalized_locality'].str.replace('*', '', regex=False).apply(
+        extract_distance_direction)
+
+    return grouped
+
 
 # --- TF-IDF setup ---
-important_phrases = [
-    'north', 'south', 'east', 'west',
-    'northeast', 'northwest', 'southeast', 'southwest'
-]
 
 def custom_tokenizer(text):
+    """Tokenizer that retains numbers, decimals, and words."""
     # Remove all punctuation except periods in numbers (e.g., 3.5)
     text = re.sub(r'[^\w\s.]', '', text)
     # Tokenize on words and decimal numbers
     return re.findall(r'\b\d+(?:\.\d+)?\b|\b\w+\b', text)
 
-# Custom stop words tuned for geographic data
-custom_stop_words = [
-    'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of', 'or', 'but', 'from', 'between', 'along',
-    'texas', 'oklahoma', 
-    'junction', 'intersection',
-    'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', 'bed', 'bank'
-    'x'
-]
 
-vectorizer = TfidfVectorizer(
-    tokenizer=custom_tokenizer,
-    lowercase=False,
-    stop_words=custom_stop_words
-)
+def get_custom_stop_words():
+    """Stop words tuned for geographic and soil descriptors to reduce noise."""
+    return [
+        'the', 'a', 'an', 'in', 'at', 'on', 'for', 'by', 'with', 'and', 'of', 'or', 'but', 'from', 'between', 'along',
+        'texas', 'oklahoma',
+        'junction', 'intersection',
+        'sandy', 'clay', 'soil', 'loam', 'sandy', 'rocky', 'silt', 'bed', 'bank', 'x'
+    ]
 
-# --- Initial TF-IDF matrix on pre-alias normalized locality ---
-X = vectorizer.fit_transform(grouped['normalized_locality'])
-vocab = vectorizer.vocabulary_
+def get_important_phrases():
+    """
+    important phrases for directional tokenization
+    """
+    return [
+        'north', 'south', 'east', 'west',
+        'northeast', 'northwest', 'southeast', 'southwest'
+    ]
 
-token_freq = {token: X[:, idx].nnz for token, idx in vocab.items()}  # document frequency
-vocab_keys = list(vocab.keys())
 
-protected_tokens = set([
-    "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
-    "northern", "southern", "eastern", "western", "central",
-    "1st", "2nd", "3rd", "4th", "5th", "6th",
-    "7th", "8th", "9th", "10th", "11th", "12th",
-    "13th", "14th", "15th", "16th", "17th", "18th",
-    "19th", "20th"
-])
-merged = {}
+def build_tfidf_matrix(grouped):
+    """
+    Builds a TF-IDF matrix from normalized localities in the 'grouped' DataFrame.
+    Returns:
+        id_matrix (sparse matrix), vectorizer (TfidfVectorizer)
+    """
+    vectorizer = TfidfVectorizer(
+        tokenizer=custom_tokenizer,
+        lowercase=False,
+        stop_words=get_custom_stop_words()
+    )
+
+    # --- Initial TF-IDF matrix on pre-alias normalized locality ---
+    id_matrix = vectorizer.fit_transform(grouped['normalized_locality'])
+    return id_matrix, vectorizer
+
 
 def dynamic_threshold(token1, token2, base_threshold=75, max_threshold=90):
+    """
+    Calculates a dynamic fuzzy match threshold based on average token length.
+    """
+
     avg_len = (len(token1) + len(token2)) / 2
     if avg_len <= 5:
         return base_threshold
@@ -540,70 +553,93 @@ def dynamic_threshold(token1, token2, base_threshold=75, max_threshold=90):
     else:
         return base_threshold + ((avg_len - 5) / 10) * (max_threshold - base_threshold)
 
-township_pattern = r'^[trs]\d{1,3}[nsew]?$'
 
-# --- Fuzzy token aliasing ---
-for i in range(len(vocab_keys)):
-    token_i = vocab_keys[i]
+def fuzzy_alias_tokens(id_matrix, vectorizer):
+    """
+     Identifies and merges similar tokens using fuzzy matching on the TF-IDF vocabulary.
+     Protects directional, ordinal, township codes, and key adjectives.
+    """
+    vocab = vectorizer.vocabulary_
 
-    # Skip token_i if it's a digit, protected, or already merged
-    if (
-        token_i.replace(".", "").isdigit()
-        or token_i in protected_tokens
-        or token_i in merged
-    ):
-        continue
+    token_freq = {token: id_matrix[:, idx].nnz for token, idx in vocab.items()}  # document frequency
+    vocab_keys = list(vocab.keys())
 
-    if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_i):
-        continue
-    if re.fullmatch(township_pattern, token_i):
-        continue
 
-    for j in range(i + 1, len(vocab_keys)):
-        token_j = vocab_keys[j]
+    protected_tokens = set([
+        "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
+        "northern", "southern", "eastern", "western", "central",
+        "1st", "2nd", "3rd", "4th", "5th", "6th",
+        "7th", "8th", "9th", "10th", "11th", "12th",
+        "13th", "14th", "15th", "16th", "17th", "18th",
+        "19th", "20th"
+    ])
 
-        # Skip token_j if it's a digit or already merged — but NOT if it's protected
+    township_pattern = r'^[trs]\d{1,3}[nsew]?$'
+    merged = {}
+
+    # --- Fuzzy token aliasing ---
+    for i in range(len(vocab_keys)):
+        token_i = vocab_keys[i]
+
+        # Skip token_i if it's a digit, protected, or already merged
         if (
-            token_j.replace(".", "").isdigit()
-            or token_j in merged
+            token_i.replace(".", "").isdigit()
+            or token_i in protected_tokens
+            or token_i in merged
         ):
             continue
 
-        if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_j):
+        if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_i):
             continue
-        if re.fullmatch(township_pattern, token_j):
-            continue
-
-        # Length similarity check
-        len_i = len(token_i)
-        len_j = len(token_j)
-        if min(len_i, len_j) / max(len_i, len_j) < 0.8:
+        if re.fullmatch(township_pattern, token_i):
             continue
 
-        score = fuzz.ratio(token_i, token_j)
-        threshold = dynamic_threshold(token_i, token_j)
+        for j in range(i + 1, len(vocab_keys)):
+            token_j = vocab_keys[j]
 
-        if score >= threshold:
-            freq_i = token_freq.get(token_i, 0)
-            freq_j = token_freq.get(token_j, 0)
-
-            if freq_i < 5 and freq_j >= 5:
-                canonical, other = token_j, token_i
-            elif freq_j < 5 and freq_i >= 5:
-                canonical, other = token_i, token_j
-            else:
+            # Skip token_j if it's a digit or already merged — but NOT if it's protected
+            if (
+                token_j.replace(".", "").isdigit()
+                or token_j in merged
+            ):
                 continue
 
-            # Prevent overriding protected tokens as aliases
-            if other in protected_tokens or other in merged:
+            if re.fullmatch(r'\d{1,4}(st|nd|rd|th)', token_j):
+                continue
+            if re.fullmatch(township_pattern, token_j):
                 continue
 
-            print(f"Aliasing '{other}' ({token_freq.get(other, 0)}) to '{canonical}' ({token_freq.get(canonical, 0)}) (score {score:.2f} ≥ {threshold:.2f})")
-            merged[other] = canonical
+            # Length similarity check
+            len_i = len(token_i)
+            len_j = len(token_j)
+            if min(len_i, len_j) / max(len_i, len_j) < 0.8:
+                continue
 
+            score = fuzz.ratio(token_i, token_j)
+            threshold = dynamic_threshold(token_i, token_j)
 
-# --- Apply alias substitutions into normalized locality ---
+            if score >= threshold:
+                freq_i = token_freq.get(token_i, 0)
+                freq_j = token_freq.get(token_j, 0)
+
+                if freq_i < 5 and freq_j >= 5:
+                    canonical, other = token_j, token_i
+                elif freq_j < 5 and freq_i >= 5:
+                    canonical, other = token_i, token_j
+                else:
+                    continue
+
+                # Prevent overriding protected tokens as aliases
+                if other in protected_tokens or other in merged:
+                    continue
+
+                print(f"Aliasing '{other}' ({token_freq.get(other, 0)}) to '{canonical}' ({token_freq.get(canonical, 0)}) (score {score:.2f} ≥ {threshold:.2f})")
+                merged[other] = canonical
+
+        return merged
+
 def apply_aliases(text, alias_map):
+    """ Apply alias substitutions into normalized locality ---"""
     tokens = text.split()
     result = []
 
@@ -615,200 +651,192 @@ def apply_aliases(text, alias_map):
 
     return ' '.join(result)
 
-
-grouped['normalized_locality'] = grouped['normalized_locality'].apply(lambda t: apply_aliases(t, merged))
-
-# --- Rebuild TF-IDF matrix on alias-applied text ---
-X = vectorizer.fit_transform(grouped['normalized_locality'])
-vocab = vectorizer.vocabulary_
-
-# --- Re-weight directional and numeric tokens ---
-for token, idx in vocab.items():
-    if token in important_phrases or re.fullmatch(r'\d+(\.\d+)?', token):
-        X[:, idx] *= 1.10
+def rebuild_tfidf_on_alias(grouped, vectorizer):
+    """ Rebuild TF-IDF matrix on alias-applied text"""
+    id_matrix = vectorizer.fit_transform(grouped['normalized_locality'])
+    vocab = vectorizer.vocabulary_
+    important_phrases = get_important_phrases()
+    # --- Re-weight directional and numeric tokens ---
+    for token, idx in vocab.items():
+        if token in important_phrases or re.fullmatch(r'\d+(\.\d+)?', token):
+            id_matrix[:, idx] *= 1.10
+    return id_matrix
 
 # --- Cosine similarity ---
-similarity = cosine_similarity(X)
+def group_by_similarity(grouped, id_matrix):
+    """
+    Assign Suggested_ID and Grouper_ID using cosine similarity groupings.
+    """
+    similarity = cosine_similarity(id_matrix)
 
-threshold = 0.85
+    threshold = 0.85
 
-suggested_ids = [-1] * len(grouped)
-group_counter = 1
+    suggested_ids = [-1] * len(grouped)
+    group_counter = 1
 
-for i in range(len(grouped)):
-    if suggested_ids[i] != -1:
-        continue
-    suggested_ids[i] = group_counter
-    for j in range(i + 1, len(grouped)):
-        if suggested_ids[j] == -1 and similarity[i, j] >= threshold:
-            suggested_ids[j] = group_counter
-    group_counter += 1
+    for i in range(len(grouped)):
+        if suggested_ids[i] != -1:
+            continue
+        suggested_ids[i] = group_counter
+        for j in range(i + 1, len(grouped)):
+            if suggested_ids[j] == -1 and similarity[i, j] >= threshold:
+                suggested_ids[j] = group_counter
+        group_counter += 1
 
-grouped['Suggested_ID'] = suggested_ids
-grouped['Grouper_ID'] = grouped['Suggested_ID'].astype(str)
+    grouped['Suggested_ID'] = suggested_ids
+    grouped['Grouper_ID'] = grouped['Suggested_ID'].astype(str)
 
-# Now safe to group by Grouper_ID
-group_members = (
-    grouped
-    .drop(columns=['Grouper_ID'])
-    .groupby(grouped['Grouper_ID'])
-    .apply(lambda df: df.index.tolist())
-    .to_dict()
-)
+    return grouped, similarity
 
-grouped['Suggested_ID'] = suggested_ids
 
-# --- Compute confidence ---
-confidence_scores = []
+def assign_confidence_scores(grouped, similarity):
+    """
+        Compute average intra-group cosine similarity as a 0–100 confidence score.
+    """
+    group_members = (
+        grouped
+        .drop(columns=['Grouper_ID'])
+        .groupby(grouped['Grouper_ID'])
+        .apply(lambda df: df.index.tolist())
+        .to_dict()
+    )
 
-for idx in range(len(grouped)):
-    group_id = grouped.iloc[idx]['Grouper_ID']
-    members = group_members[group_id]
+    confidence_scores = []
 
-    # If the group has only one member, confidence is 1
-    if len(members) == 1:
-        confidence_scores.append(1.0)
-        continue
+    for idx in range(len(grouped)):
+        group_id = grouped.iloc[idx]['Grouper_ID']
+        members = group_members[group_id]
 
-    # Calculate average similarity to other members of the group
-    sims = [
-        similarity[idx, other_idx]
-        for other_idx in members
-        if other_idx != idx
+        # If the group has only one member, confidence is 1
+        if len(members) == 1:
+            confidence_scores.append(1.0)
+            continue
+
+        # Calculate average similarity to other members of the group
+        sims = [
+            similarity[idx, other_idx]
+            for other_idx in members
+            if other_idx != idx
+        ]
+        confidence = sum(sims) / len(sims)
+        confidence_scores.append(confidence)
+
+    grouped['Confidence'] = [round(c * 100, 1) for c in confidence_scores]
+    return grouped
+
+
+def validate_directional_splits(grouped):
+    """
+    Split groups with the same Suggested_ID into subgroups by distinct distance/direction signatures.
+    Validate suggested groups by distance/direction.
+    """
+    for group_id in grouped['Suggested_ID'].unique():
+        members = grouped[grouped['Suggested_ID'] == group_id]
+        # get the list of extracted distance/direction for each member
+        distance_lists = members['distance_direction']
+
+        # if all members either have no distance/direction or all have the exact same, do not split
+        if len(distance_lists.apply(tuple).unique()) <= 1:
+            continue
+
+        # if no members have any distance/direction data, do not split
+        signatures = distance_lists.apply(tuple).unique()
+        if all(len(lst) == 0 for lst in distance_lists):
+            continue
+        for idx, sig in enumerate(signatures, start=1):  # start=1 to begin with .1
+            suffix = f".{idx}"
+            to_update = members[distance_lists.apply(tuple) == sig].index
+            grouped.loc[to_update, 'Grouper_ID'] = f"{group_id}{suffix}"
+        return grouped
+
+
+def set_null_groups_to_zero(grouped):
+    """If the original locality is blank, null, or matches known placeholders, set Grouper_ID to 0"""
+    null_strings = [
+        'unknown',
+        'no locality',
+        '[no locality]',
+        '[no additional data]',
+        '[no additional locality data on sheet]',
+        '[locality not indicated]',
+        '[unspecified]',
+        '[No location data on label.]',
+        '[ Not readable ]',
+        '[none]',
+        'none listed',
+        'no further locality',
+        'no location'
     ]
-    confidence = sum(sims) / len(sims)
-    confidence_scores.append(confidence)
 
-# Assign after loop
-grouped['Confidence'] = [round(c * 100, 1) for c in confidence_scores]
+    mask = (
+        grouped['locality'].isnull()
+        | (grouped['locality'].str.strip() == '')
+        | (grouped['locality'].str.strip().str.lower().isin({s.lower() for s in null_strings}))
+    )
 
+    grouped.loc[mask, 'Grouper_ID'] = '0'
 
-
-
-# --- Validate suggested groups by distance/direction ---
-for group_id in grouped['Suggested_ID'].unique():
-    members = grouped[grouped['Suggested_ID'] == group_id]
-
-    # get the list of extracted distance/direction for each member
-    distance_lists = members['distance_direction']
-
-    # if all members either have no distance/direction or all have the exact same, do not split
-    if len(distance_lists.apply(tuple).unique()) <= 1:
-        continue
-
-    # if no members have any distance/direction data, do not split
-    signatures = distance_lists.apply(tuple).unique()
-    if all(len(lst) == 0 for lst in distance_lists):
-        continue
-    for idx, sig in enumerate(signatures, start=1):  # start=1 to begin with .1
-        suffix = f".{idx}"
-        to_update = members[distance_lists.apply(tuple) == sig].index
-        grouped.loc[to_update, 'Grouper_ID'] = f"{group_id}{suffix}"
+    return grouped
 
 
-# If the original locality is blank, null, or matches known placeholders, set Grouper_ID to 0
-null_strings = [
-    'unknown',
-    'no locality',
-    '[no locality]',
-    '[no additional data]',
-    '[no additional locality data on sheet]',
-    '[locality not indicated]',
-    '[unspecified]',
-    '[No location data on label.]',
-    '[ Not readable ]',
-    '[none]',
-    'none listed',
-    'no further locality',
-    'no location'
-]
-grouped.loc[
-    grouped['locality'].isnull()
-    | (grouped['locality'].str.strip() == '')
-    | (grouped['locality'].str.strip().str.lower().isin([s.lower() for s in null_strings]))
-    ,
-    'Grouper_ID'
-] = '0'
+def reorder_similar_singletons(grouped, similarity, min_similarity=0.80):
+    """
+    Reorder singletons based on similarity to closest larger group.
+    Identify singleton groups and place them after the most similar non-singleton group.
+    """
+    start_time = time.time()
+    print("Identifying singleton placements...")
 
+    group_id_to_indices = defaultdict(list)
+    for idx, gid in enumerate(grouped['Grouper_ID']):
+        group_id_to_indices[gid].append(idx)
 
-# --- Reorder singletons based on similarity to closest larger group ---
-from collections import defaultdict
-import numpy as np
-import time
+    # Count how many rows belong to each base group (before .01, .02 suffixes)
+    base_group_counts = grouped['Grouper_ID'].apply(lambda x: str(x).split('.')[0]).value_counts().to_dict()
 
-start_time = time.time()
-print("Identifying singleton placements...")
+    # Filter singleton_ids (that are not directionally split)
+    singleton_ids = []
+    for gid, idxs in group_id_to_indices.items():
+        if len(idxs) != 1:
+            continue  # Not a singleton
 
-group_id_to_indices = defaultdict(list)
-for idx, gid in enumerate(grouped['Grouper_ID']):
-    group_id_to_indices[gid].append(idx)
+        match = re.match(r'^(\d+)\.\d+$', str(gid))
+        if match:
+            base_id = match.group(1)
+            if base_group_counts.get(base_id, 0) > 1:
+                continue  # It's a directional split — skip it
 
-# Count how many rows belong to each base group (before .01, .02 suffixes)
-base_group_counts = grouped['Grouper_ID'].apply(lambda x: str(x).split('.')[0]).value_counts().to_dict()
+        singleton_ids.append(gid)
 
-# Filter singleton_ids (that are not directionally split)
-singleton_ids = []
-for gid, idxs in group_id_to_indices.items():
-    if len(idxs) != 1:
-        continue  # Not a singleton
+    # Now define non-singleton_ids AFTER filtering valid singleton_ids
+    non_singleton_ids = [gid for gid in group_id_to_indices if gid not in singleton_ids]
 
-    match = re.match(r'^(\d+)\.\d+$', str(gid))
-    if match:
-        base_id = match.group(1)
-        if base_group_counts.get(base_id, 0) > 1:
-            continue  # It's a directional split — skip it
+    singleton_inserts = {}
+    for singleton_id in singleton_ids:
+        singleton_idx = group_id_to_indices[singleton_id][0]
+        best_score = -1
+        best_match_id = None
 
-    singleton_ids.append(gid)
+        for gid in non_singleton_ids:
+            group_idxs = group_id_to_indices[gid]
+            max_sim = max(similarity[singleton_idx, other_idx] for other_idx in group_idxs)
 
-# Now define non-singleton_ids AFTER filtering valid singleton_ids
-non_singleton_ids = [gid for gid in group_id_to_indices if gid not in singleton_ids]
+            if max_sim > best_score:
+                best_score = max_sim
+                best_match_id = gid
 
-MIN_SINGLETON_SIMILARITY = 0.80
-singleton_inserts = {}
-for singleton_id in singleton_ids:
-    singleton_idx = group_id_to_indices[singleton_id][0]
-    best_score = -1
-    best_match_id = None
+        if best_score >= min_similarity:
+            singleton_inserts[singleton_id] = best_match_id
 
-    for gid in non_singleton_ids:
-        group_idxs = group_id_to_indices[gid]
-        max_sim = max(similarity[singleton_idx, other_idx] for other_idx in group_idxs)
+    print(f"Placed {len(singleton_inserts)} of {len(singleton_ids)} singleton groups based on similarity ≥ {min_similarity}.")
+    print(f"Completed in {time.time() - start_time:.2f} seconds.")
 
-        if max_sim > best_score:
-            best_score = max_sim
-            best_match_id = gid
-
-    if best_score >= MIN_SINGLETON_SIMILARITY:
-        singleton_inserts[singleton_id] = best_match_id
-
-print(f"Placed {len(singleton_inserts)} of {len(singleton_ids)} singleton groups based on similarity ≥ {MIN_SINGLETON_SIMILARITY}.")
-print(f"Completed in {time.time() - start_time:.2f} seconds.")
-
-# --- Convert extracted distance_direction tuples to readable string ---
-grouped['Distance_Direction'] = grouped['distance_direction'].apply(
-    lambda lst: '; '.join([f"{d} {u} {dir}" if u else f"{d} {dir}" for d, dir, u in lst]) if lst else ''
-)
-
-# --- Merge back ---
-output_df = df.merge(
-    grouped[[grouping_field, 'Grouper_ID', 'normalized_locality']],
-    on=grouping_field,
-    how='left'
-)
-
-# --- Export ---
-columns_to_export = [
-    'catalogNumber', 'institutionCode', 'collectionCode', 'county',
-    'locality', 'bels_location_id', 'Grouper_ID', 'normalized_locality', 'Confidence',
-    'Distance_Direction'
-]
-
-# For consistent columns, protect against missing
-columns_to_export = [col for col in columns_to_export if col in grouped.columns]
-
-import re
+    return singleton_inserts
 
 def sort_key(val):
+    """
+    Sort key for Grouper_ID values supporting numeric and sub-suffix (e.g., '12.1').
+    """
     match = re.match(r'^(\d+)(?:\.(\d+))?$', str(val))
     if match:
         num = int(match.group(1))
@@ -817,8 +845,11 @@ def sort_key(val):
     else:
         return (float('inf'), float('inf'))
 
-export_df = grouped[columns_to_export].drop_duplicates()
-def grouper_sort_key(gid):
+
+def grouper_sort_key(gid, singleton_inserts):
+    """
+    Sort key that places singleton IDs directly after their closest matched group ID.
+    """
     if gid in singleton_inserts:
         anchor_gid = singleton_inserts[gid]
         anchor_tuple = sort_key(anchor_gid)
@@ -827,9 +858,84 @@ def grouper_sort_key(gid):
     else:
         return sort_key(gid)
 
-export_df = export_df.sort_values(by='Grouper_ID', key=lambda col: col.map(grouper_sort_key))
+def export_grouped_csv(grouped, df, csv_path, grouping_field, singleton_inserts):
+
+    # --- Convert extracted distance_direction tuples to readable string ---
+    grouped['Distance_Direction'] = grouped['distance_direction'].apply(
+        lambda lst: '; '.join([f"{d} {u} {dir}" if u else f"{d} {dir}" for d, dir, u in lst]) if lst else ''
+    )
+
+    # --- Export ---
+    columns_to_export = [
+        'catalogNumber', 'institutionCode', 'collectionCode', 'county',
+        'locality', 'bels_location_id', 'Grouper_ID', 'normalized_locality', 'Confidence',
+        'Distance_Direction'
+    ]
+
+    export_df = grouped[columns_to_export].drop_duplicates()
+
+    # --- Merge back ---
+    output_df = df.merge(
+        grouped[[grouping_field, 'Grouper_ID', 'normalized_locality']],
+        on=grouping_field,
+        how='left'
+    )
 
 
-output_file = os.path.splitext(csv_path)[0] + '-key.csv'
-export_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-print(f"Exported with suggested groups to: {output_file}")
+    # For consistent columns, protect against missing
+    columns_to_export = [col for col in columns_to_export if col in grouped.columns]
+
+
+    export_df = export_df.sort_values(
+        by='Grouper_ID',
+        key=lambda col: col.map(lambda gid: grouper_sort_key(gid, singleton_inserts))
+    )
+
+
+    output_file = os.path.splitext(csv_path)[0] + '-key.csv'
+    export_df.to_csv(output_file, index=False, encoding='utf-8-sig')
+    print(f"Exported with suggested groups to: {output_file}")
+
+def grouper_main():
+    """master function which runs all methods above in the necessary order"""
+    grouping_field = "bels_location_id"
+
+    # 1) read in input csv
+    df, sep, csv_path = load_input_csv(grouping_field)
+
+    # 2) reprocess + extract distance/direction on unique rows
+    grouped = preprocess_localities(df, grouping_field)
+
+    # 3) Fuzzy alias discovery based on initial matrix
+    id_matrix, vectorizer = build_tfidf_matrix(grouped)
+
+    # 4) Apply aliases to text
+    merged = fuzzy_alias_tokens(id_matrix, vectorizer)
+
+    # 5) Apply aliases to text
+    grouped['normalized_locality'] = grouped['normalized_locality'].apply(lambda t: apply_aliases(t, merged))
+
+    # 6) Rebuild TF-IDF on alias-applied text and re-weight tokens
+    id_matrix = rebuild_tfidf_on_alias(grouped, vectorizer)
+
+    # 7) Group by cosine similarity → Suggested_ID/Grouper_ID
+    grouped, similarity = group_by_similarity(grouped, id_matrix)
+
+    # 8) Directional splits (subgroup IDs like 12.1, 12.2)
+    grouped = validate_directional_splits(grouped)
+
+    # 9) Null/placeholder localities → Grouper_ID = '0'
+    grouped = set_null_groups_to_zero(grouped)
+
+    # 10) Confidence score per record (avg intra-group similarity × 100)
+    grouped = assign_confidence_scores(grouped, similarity)
+
+    # 11) Place singleton groups after the most similar non-singleton group
+    singleton_inserts = reorder_similar_singletons(grouped, similarity)
+
+    # 12) export csvs
+    export_grouped_csv(grouped, df, csv_path, grouping_field, singleton_inserts)
+
+
+if __name__ == '__main__':
+    grouper_main()
