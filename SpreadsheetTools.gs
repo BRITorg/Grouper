@@ -343,50 +343,53 @@ function fillFinalNameFormulas() {
   const originalHeaders = originalSheet.getRange(1, 1, 1, originalSheet.getLastColumn()).getValues()[0];
   const keyHeaders = keySheet.getRange(1, 1, 1, keySheet.getLastColumn()).getValues()[0];
 
-  // Get column indexes
-  const originalGrouperCol = originalHeaders.indexOf("Grouper_ID");
+  // Find target column in Original ("Grouper_ID" or fallback "FinalName")
+  let targetCol = originalHeaders.indexOf("Grouper_ID");
+  if (targetCol === -1) targetCol = originalHeaders.indexOf("FinalName");
+
   const originalBelsCol = originalHeaders.indexOf("bels_location_id");
   const keyGrouperCol = keyHeaders.indexOf("Grouper_ID");
   const keyBelsCol = keyHeaders.indexOf("bels_location_id");
 
-  if (
-    originalGrouperCol === -1 ||
-    originalBelsCol === -1 ||
-    keyGrouperCol === -1 ||
-    keyBelsCol === -1
-  ) {
-    SpreadsheetApp.getUi().alert('One or more required columns ("Grouper_ID", "bels_location_id") not found.');
+  if (targetCol === -1 || originalBelsCol === -1 || keyGrouperCol === -1 || keyBelsCol === -1) {
+    SpreadsheetApp.getUi().alert(
+      'Missing required columns. Need ("Grouper_ID" or "FinalName") and "bels_location_id" in Original, plus "Grouper_ID" and "bels_location_id" in Key.'
+    );
     return;
   }
 
-  const keyGrouperColLetter = columnToLetter(keyGrouperCol + 1);
-  const keyBelsColLetter = columnToLetter(keyBelsCol + 1);
-  const originalBelsColLetter = columnToLetter(originalBelsCol + 1);
+  const lastRow = originalSheet.getLastRow();
+  if (lastRow < 2) return; // nothing to do
 
-  const startRow = 2;
-  const numRows = originalSheet.getLastRow() - 1;
-  const targetRange = originalSheet.getRange(startRow, originalGrouperCol + 1, numRows);
-  const formulas = [];
+  const numRows = lastRow - 1;
+  const originalBels = originalSheet.getRange(2, originalBelsCol + 1, numRows, 1).getValues();
 
-  for (let i = 0; i < numRows; i++) {
-    const rowNum = startRow + i;
-    const formula = `=FILTER(Key!${keyGrouperColLetter}:${keyGrouperColLetter}, Key!${keyBelsColLetter}:${keyBelsColLetter}=Original!${originalBelsColLetter}${rowNum})`;
-    formulas.push([formula]);
-  }
+  const keyData = keySheet.getRange(2, 1, Math.max(keySheet.getLastRow() - 1, 0), keySheet.getLastColumn()).getValues();
 
-  targetRange.setFormulas(formulas);
+  // Build bels_location_id → Grouper_ID map
+  const belsToGrouper = {};
+  keyData.forEach(row => {
+    const belsId = row[keyBelsCol];
+    const grouperId = row[keyGrouperCol];
+    if (belsId !== "" && belsId !== null && grouperId !== "" && grouperId !== null) {
+      belsToGrouper[belsId] = grouperId;
+    }
+  });
+
+  // Build output column (blank when no match)
+  const outCol = originalBels.map(belsRow => {
+    const belsId = belsRow[0];
+    if (belsId in belsToGrouper) {
+      return [belsToGrouper[belsId]];
+    }
+    return [null]; // blank cell when no match
+  });
+
+  // Write ONLY the target column
+  originalSheet.getRange(2, targetCol + 1, numRows, 1).setValues(outCol);
 }
 
-// Helper function to convert a column number (1-based) to a letter (e.g., 1 → A)
-function columnToLetter(column) {
-  let letter = "";
-  while (column > 0) {
-    const mod = (column - 1) % 26;
-    letter = String.fromCharCode(65 + mod) + letter;
-    column = Math.floor((column - mod) / 26);
-  }
-  return letter;
-}
+
 
 //To CoGe Tools
 
