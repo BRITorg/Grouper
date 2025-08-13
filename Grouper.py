@@ -636,7 +636,7 @@ def fuzzy_alias_tokens(id_matrix, vectorizer):
                 print(f"Aliasing '{other}' ({token_freq.get(other, 0)}) to '{canonical}' ({token_freq.get(canonical, 0)}) (score {score:.2f} ≥ {threshold:.2f})")
                 merged[other] = canonical
 
-        return merged
+    return merged
 
 def apply_aliases(text, alias_map):
     """ Apply alias substitutions into normalized locality ---"""
