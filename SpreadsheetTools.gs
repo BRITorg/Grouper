@@ -447,7 +447,7 @@ function highlightCorrectedAndSkippedDuplicates() {
 
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
-  const catalogIndex = headers.indexOf("catalognumber");
+  const catalogIndex = headers.indexOf("CatalogNumber");
   const verificationIndex = headers.indexOf("Verification type");
   const dateIndex = headers.indexOf("Date verified");
 
