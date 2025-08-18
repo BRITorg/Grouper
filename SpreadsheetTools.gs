@@ -10,7 +10,10 @@ function onOpen() {
 
   const OriginalMenu = ui.createMenu('Original Sheet Tools')
     .addItem('Populate Blank Catalog Numbers', 'fillBlankCatalogNumbers')
-    .addItem('Populate Grouper_id from Key', 'fillFinalNameFormulas');
+    .addItem('Populate Grouper_id from Key', 'fillFinalNameFormulas')
+    .addItem('Finalize Review Column', 'FinalizeReview')
+    .addItem('Populate Data from CoGe', 'fillCoGeFormulas');
+
 
   const ToCogeMenu = ui.createMenu('To CoGe Export Tools')
     .addItem('Export CSV(s) for CoGe', 'exportCSVsByCounty')
@@ -335,59 +338,101 @@ function fillBlankCatalogNumbers() {
 }
 
 
-function fillFinalNameFormulas() {
+function FinalizeReview() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const originalSheet = ss.getSheetByName("Original");
-  const keySheet = ss.getSheetByName("Key");
-
-  const originalHeaders = originalSheet.getRange(1, 1, 1, originalSheet.getLastColumn()).getValues()[0];
-  const keyHeaders = keySheet.getRange(1, 1, 1, keySheet.getLastColumn()).getValues()[0];
-
-  // Find target column in Original ("Grouper_ID" or fallback "FinalName")
-  let targetCol = originalHeaders.indexOf("Grouper_ID");
-  if (targetCol === -1) targetCol = originalHeaders.indexOf("FinalName");
-
-  const originalBelsCol = originalHeaders.indexOf("bels_location_id");
-  const keyGrouperCol = keyHeaders.indexOf("Grouper_ID");
-  const keyBelsCol = keyHeaders.indexOf("bels_location_id");
-
-  if (targetCol === -1 || originalBelsCol === -1 || keyGrouperCol === -1 || keyBelsCol === -1) {
-    SpreadsheetApp.getUi().alert(
-      'Missing required columns. Need ("Grouper_ID" or "FinalName") and "bels_location_id" in Original, plus "Grouper_ID" and "bels_location_id" in Key.'
-    );
+  const sheet = ss.getSheetByName('Original');
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Sheet "Original" not found.');
     return;
   }
 
-  const lastRow = originalSheet.getLastRow();
+  // Find the REVIEW column by header name (row 1)
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const reviewColIndex = headers.indexOf('REVIEW') + 1; // 1-based
+  if (reviewColIndex === 0) {
+    SpreadsheetApp.getUi().alert('Column "REVIEW" not found on the "Original" sheet.');
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    // No data rows
+    return;
+  }
+
+  // Range beneath the header in the REVIEW column
+  const reviewRange = sheet.getRange(2, reviewColIndex, lastRow - 1, 1);
+
+  // Do an in-place "paste values only"
+  reviewRange.copyTo(reviewRange, { contentsOnly: true });
+}
+
+
+
+function fillCoGeFormulas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Original");
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Sheet "Original" not found.');
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
   if (lastRow < 2) return; // nothing to do
 
+  // Column indexes (1-based): F=6, G=7, H=8, J=10, L=12, M=13, N=14, P=16, AA=27, AG=33
+  const startRow = 2;
   const numRows = lastRow - 1;
-  const originalBels = originalSheet.getRange(2, originalBelsCol + 1, numRows, 1).getValues();
 
-  const keyData = keySheet.getRange(2, 1, Math.max(keySheet.getLastRow() - 1, 0), keySheet.getLastColumn()).getValues();
+  // Read AG once
+  const agVals = sheet.getRange(startRow, 33, numRows, 1).getValues(); // AG2:AG
 
-  // Build bels_location_id → Grouper_ID map
-  const belsToGrouper = {};
-  keyData.forEach(row => {
-    const belsId = row[keyBelsCol];
-    const grouperId = row[keyGrouperCol];
-    if (belsId !== "" && belsId !== null && grouperId !== "" && grouperId !== null) {
-      belsToGrouper[belsId] = grouperId;
+  // Formulas to fill when blank
+  const formulaTargets = [
+    { col:  6, makeFormula: (r) => `=TEXT(FILTER('From CoGe'!F:F, 'From CoGe'!AD:AD=AA${r}), "MM/DD/YY")` }, // F
+    { col:  7, makeFormula: (r) => `=FILTER('From CoGe'!I:I, 'From CoGe'!AD:AD=AA${r})` },                  // G
+    { col:  8, makeFormula: (r) => `=FILTER('From CoGe'!H:H, 'From CoGe'!AD:AD=AA${r})` },                  // H
+    { col: 10, makeFormula: (r) => `=FILTER('From CoGe'!J:J, 'From CoGe'!AD:AD=AA${r})` },                  // J
+    { col: 12, makeFormula: (r) => `=FILTER('From CoGe'!E:E, 'From CoGe'!AD:AD=AA${r})` },                  // L
+    { col: 16, makeFormula: (r) => `=FILTER('From CoGe'!G:G, 'From CoGe'!AD:AD=AA${r})` },                  // P
+  ];
+
+  // Fixed-value fills when blank
+  const constantTargets = [
+    { col: 13, text: 'CCH2 Georef. Protocol 09/30/2020' }, // M
+    { col: 14, text: 'GEOLocate Batch Processing Tool' },  // N
+  ];
+
+  // Preload current values for all targets to avoid per-cell reads
+  const formulaColValues  = formulaTargets.map(t  => sheet.getRange(startRow, t.col, numRows, 1).getValues());
+  const constantColValues = constantTargets.map(t => sheet.getRange(startRow, t.col, numRows, 1).getValues());
+
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+    const ag = (agVals[i][0] ?? '').toString().trim().toLowerCase();
+
+    if (ag === 'none' || ag === 'skip-none') {
+      // Fill formula-based columns if blank
+      for (let k = 0; k < formulaTargets.length; k++) {
+        const currentVal = (formulaColValues[k][i][0] ?? '').toString().trim();
+        if (currentVal === '') {
+          const formula = formulaTargets[k].makeFormula(row);
+          sheet.getRange(row, formulaTargets[k].col).setFormula(formula);
+        }
+      }
+
+      // Fill constant text columns if blank
+      for (let k = 0; k < constantTargets.length; k++) {
+        const currentVal = (constantColValues[k][i][0] ?? '').toString().trim();
+        if (currentVal === '') {
+          sheet.getRange(row, constantTargets[k].col).setValue(constantTargets[k].text);
+        }
+      }
     }
-  });
-
-  // Build output column (blank when no match)
-  const outCol = originalBels.map(belsRow => {
-    const belsId = belsRow[0];
-    if (belsId in belsToGrouper) {
-      return [belsToGrouper[belsId]];
-    }
-    return [null]; // blank cell when no match
-  });
-
-  // Write ONLY the target column
-  originalSheet.getRange(2, targetCol + 1, numRows, 1).setValues(outCol);
+  }
 }
+
+
 
 
 
