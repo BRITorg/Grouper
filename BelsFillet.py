@@ -54,8 +54,13 @@ def process_file(file_path):
     try:
         institution_col_letter = colnum_to_excel_col(df.columns.get_loc("institutionCode"))
         df["isInstitution"] = [
-            f'=REGEXMATCH({institution_col_letter}{i+2}, "BRIT|TEX|OKL|OKLA|LL|LLC|HSU|ILL|WILLI|TCSW|NTSC|VDB|ILLS|BAYLU|CAMU|CSU|DUR|ECSC|NOSU|NWOSU|OCU|PAUH|SAT|SEU|SHST|SRSC|TAES|TTC|TULS|UTEP|WTS")'
+            f'=REGEXMATCH({institution_col_letter}{i+2}, "BRIT|VDB|NLU|HSU|ACU|TAC|TCSW|NTSC|FWNC")'
             for i in range(len(df))
+
+# older broader institutuion list
+#            f'=REGEXMATCH({institution_col_letter}{i+2}, "BRIT|TEX|OKL|OKLA|LL|LLC|HSU|ILL|WILLI|TCSW|NTSC|VDB|ILLS|BAYLU|CAMU|CSU|DUR|ECSC|NOSU|NWOSU|OCU|PAUH|SAT|SEU|SHST|SRSC|TAES|TTC|TULS|UTEP|WTS")'
+#            for i in range(len(df))
+
         ]
     except ValueError:
         print(f"⚠️ Column 'institutionCode' not found in '{file_path}'. Skipping isInstitution formula.")

@@ -20,11 +20,16 @@ def load_input_csv(grouping_field):
     parser = argparse.ArgumentParser(description="Group and normalize locality strings.")
     parser.add_argument(
         "csv_path",
+        nargs="?",   # <-- makes it optional
         help="Path to input CSV or TSV file containing 'locality' and '{}' columns".format(grouping_field)
     )
     args = parser.parse_args()
 
-    csv_path = args.csv_path
+    # If not provided on command line, prompt the user
+    if args.csv_path:
+        csv_path = args.csv_path
+    else:
+        csv_path = input("Enter path to CSV/TSV file: ").strip()
 
     if not os.path.isfile(csv_path):
         print(f"File not found: {csv_path}")
@@ -44,6 +49,7 @@ def load_input_csv(grouping_field):
         sys.exit(1)
 
     return df, sep, csv_path
+
 
 
 def preprocess(text):

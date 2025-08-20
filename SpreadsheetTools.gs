@@ -19,7 +19,7 @@ function onOpen() {
     .addItem('Export CSV(s) for CoGe', 'exportCSVsByCounty')
 
   const FromCogeMenu = ui.createMenu('From CoGe Import Tools')
-    .addItem('Highlight duplicates', 'highlightCorrectedAndSkippedDuplicates')
+    .addItem('Highlight & Count Duplicates', 'highlightCorrectedAndSkippedDuplicates')
 
 // Main menu with nested submenus
 ui.createMenu('BELSFish')
@@ -497,16 +497,12 @@ function highlightCorrectedAndSkippedDuplicates() {
   const dateIndex = headers.indexOf("Date verified");
 
   if (catalogIndex === -1 || verificationIndex === -1 || dateIndex === -1) {
-    SpreadsheetApp.getUi().alert('Missing one or more required columns: "catalognumber", "Verification type", or "Date verified"');
+    SpreadsheetApp.getUi().alert('Missing one or more required columns: "CatalogNumber", "Verification type", or "Date verified"');
     return;
   }
 
-  const seen = new Map(); // catalogNumber -> row indices
-  const rowsToColor = {
-    green: [],
-    red: [],
-    orange: []
-  };
+  const seen = new Map();
+  const rowsToColor = { green: [], red: [], orange: [] };
 
   // Build map of catalog numbers to row indices
   for (let i = 1; i < data.length; i++) {
@@ -516,7 +512,7 @@ function highlightCorrectedAndSkippedDuplicates() {
     if (!seen.has(catNum)) {
       seen.set(catNum, []);
     }
-    seen.get(catNum).push(i); // store row index (0-based)
+    seen.get(catNum).push(i);
   }
 
   for (const [catNum, rowIndices] of seen.entries()) {
@@ -532,7 +528,6 @@ function highlightCorrectedAndSkippedDuplicates() {
     });
 
     if (correctedRows.length > 0 && skippedRows.length > 0) {
-      // Case 1: corrected and skipped
       const correctedRow = correctedRows[0];
       const skippedRow = skippedRows[0];
 
@@ -547,18 +542,15 @@ function highlightCorrectedAndSkippedDuplicates() {
         rowsToColor.orange.push(skippedRow + 1);
       }
     } else if (correctedRows.length > 1 && skippedRows.length === 0) {
-      // Case 2: only multiple corrected entries
-      // Sort by date descending
       const sorted = correctedRows.sort((a, b) => {
         const dateA = new Date(data[a][dateIndex]);
         const dateB = new Date(data[b][dateIndex]);
         return dateB - dateA;
       });
 
-      rowsToColor.green.push(sorted[0] + 1); // most recent
+      rowsToColor.green.push(sorted[0] + 1);
       sorted.slice(1).forEach(idx => rowsToColor.red.push(idx + 1));
     } else {
-      // Case 3: not a usable corrected/skipped pair
       rowIndices.forEach(idx => rowsToColor.orange.push(idx + 1));
     }
   }
@@ -576,4 +568,17 @@ function highlightCorrectedAndSkippedDuplicates() {
   rowsToColor.orange.forEach(row => {
     sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground("#fce5cd");
   });
+
+  // --- Add "count" column with COUNTIF ---
+  const lastCol = sheet.getLastColumn();
+  const lastRow = sheet.getLastRow();
+
+  // Set header
+  sheet.getRange(1, lastCol + 1).setValue("count");
+
+  // Fill formulas: =COUNTIF(R:R, Rn)
+  for (let row = 2; row <= lastRow; row++) {
+    sheet.getRange(row, lastCol + 1).setFormula(`=COUNTIF(R:R, R${row})`);
+  }
 }
+
