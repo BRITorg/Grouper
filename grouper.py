@@ -7,8 +7,43 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
 import time
+import argparse
+import sys
 
 warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None'")
+
+
+def load_input_csv(grouping_field):
+    """Loads in either CSV or TSV path and checks required columns"""
+
+    # initializing arg-parser
+    parser = argparse.ArgumentParser(description="Group and normalize locality strings.")
+    parser.add_argument(
+        "csv_path",
+        help="Path to input CSV or TSV file containing 'locality' and '{}' columns".format(grouping_field)
+    )
+    args = parser.parse_args()
+
+    csv_path = args.csv_path
+
+    if not os.path.isfile(csv_path):
+        print(f"File not found: {csv_path}")
+        sys.exit(1)
+
+    ext = os.path.splitext(csv_path)[1].lower()
+    sep = '\t' if ext == '.tsv' else ',' if ext == '.csv' else None
+
+    if sep is None:
+        print("Unsupported file type. Please provide a .csv or .tsv file.")
+        sys.exit(1)
+
+    df = pd.read_csv(csv_path, sep=sep)
+
+    if 'locality' not in df.columns or grouping_field not in df.columns:
+        print(f"CSV must contain 'locality' and '{grouping_field}' columns.")
+        sys.exit(1)
+
+    return df, sep, csv_path
 
 
 def preprocess(text):
@@ -457,28 +492,6 @@ def extract_distance_direction(text):
     # If nothing found, return empty list
     return []
 
-
-def load_input_csv(grouping_field):
-    """Loads in either csv or tsv path and checks required columns"""
-    csv_path = input("Enter path to CSV or TSV file: ").strip()
-    if not os.path.isfile(csv_path):
-        print("File not found.")
-        exit()
-
-    ext = os.path.splitext(csv_path)[1].lower()
-    sep = '\t' if ext == '.tsv' else ',' if ext == '.csv' else None
-
-    if sep is None:
-        print("Unsupported file type. Please provide a .csv or .tsv file.")
-        exit()
-
-    df = pd.read_csv(csv_path, sep=sep)
-
-    if 'locality' not in df.columns or grouping_field not in df.columns:
-        print(f"CSV must contain 'locality' and '{grouping_field}' columns.")
-        exit()
-
-    return df, sep, csv_path
 
 def preprocess_localities(df, grouping_field):
     """
