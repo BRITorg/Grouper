@@ -1,3 +1,5 @@
+//8-20-25
+
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
 
@@ -10,9 +12,8 @@ function onOpen() {
 
   const OriginalMenu = ui.createMenu('Original Sheet Tools')
     .addItem('Populate Blank Catalog Numbers', 'fillBlankCatalogNumbers')
-    .addItem('Populate Grouper_id from Key', 'fillFinalNameFormulas')
-    .addItem('Finalize Review Column', 'FinalizeReview')
-    .addItem('Populate Data from CoGe', 'fillCoGeFormulas');
+    .addItem('Populate Grouper_id from Key', 'fillGrouperIDFormulas')
+    .addItem('Finalize Review Column', 'FinalizeReview');
 
 
   const ToCogeMenu = ui.createMenu('To CoGe Export Tools')
@@ -20,6 +21,7 @@ function onOpen() {
 
   const FromCogeMenu = ui.createMenu('From CoGe Import Tools')
     .addItem('Highlight & Count Duplicates', 'highlightCorrectedAndSkippedDuplicates')
+    .addItem('Populate Data from CoGe', 'fillCoGeFormulas')
 
 // Main menu with nested submenus
 ui.createMenu('BELSFish')
@@ -582,3 +584,56 @@ function highlightCorrectedAndSkippedDuplicates() {
   }
 }
 
+function fillGrouperIDFormulas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const originalSheet = ss.getSheetByName("Original");
+  const keySheet = ss.getSheetByName("Key");
+
+  const originalHeaders = originalSheet.getRange(1, 1, 1, originalSheet.getLastColumn()).getValues()[0];
+  const keyHeaders = keySheet.getRange(1, 1, 1, keySheet.getLastColumn()).getValues()[0];
+
+  // Find target column in Original ("Grouper_ID" or fallback "FinalName")
+  let targetCol = originalHeaders.indexOf("Grouper_ID");
+  if (targetCol === -1) targetCol = originalHeaders.indexOf("FinalName");
+
+  const originalBelsCol = originalHeaders.indexOf("bels_location_id");
+  const keyGrouperCol = keyHeaders.indexOf("Grouper_ID");
+  const keyBelsCol = keyHeaders.indexOf("bels_location_id");
+
+  if (targetCol === -1 || originalBelsCol === -1 || keyGrouperCol === -1 || keyBelsCol === -1) {
+    SpreadsheetApp.getUi().alert(
+      'Missing required columns. Need ("Grouper_ID" or "FinalName") and "bels_location_id" in Original, plus "Grouper_ID" and "bels_location_id" in Key.'
+    );
+    return;
+  }
+
+  const lastRow = originalSheet.getLastRow();
+  if (lastRow < 2) return; // nothing to do
+
+  const numRows = lastRow - 1;
+  const originalBels = originalSheet.getRange(2, originalBelsCol + 1, numRows, 1).getValues();
+
+  const keyData = keySheet.getRange(2, 1, Math.max(keySheet.getLastRow() - 1, 0), keySheet.getLastColumn()).getValues();
+
+  // Build bels_location_id → Grouper_ID map
+  const belsToGrouper = {};
+  keyData.forEach(row => {
+    const belsId = row[keyBelsCol];
+    const grouperId = row[keyGrouperCol];
+    if (belsId !== "" && belsId !== null && grouperId !== "" && grouperId !== null) {
+      belsToGrouper[belsId] = grouperId;
+    }
+  });
+
+  // Build output column (blank when no match)
+  const outCol = originalBels.map(belsRow => {
+    const belsId = belsRow[0];
+    if (belsId in belsToGrouper) {
+      return [belsToGrouper[belsId]];
+    }
+    return [null]; // blank cell when no match
+  });
+
+  // Write ONLY the target column
+  originalSheet.getRange(2, targetCol + 1, numRows, 1).setValues(outCol);
+}
