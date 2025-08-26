@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog
+import re
 
 COLUMN_ORDER = [
     "catalogNumber", "scientificName", "country", "stateProvince", "institutionCode", "collectionCode", "county", "locality",
@@ -52,20 +53,20 @@ def process_file(file_path):
     # Fill formulas
     df["Grouper_ID"] = pd.NA
     try:
-        institution_col_letter = colnum_to_excel_col(df.columns.get_loc("institutionCode"))
-        df["isInstitution"] = [
-            f'=REGEXMATCH({institution_col_letter}{i+2}, "BRIT|VDB|NLU|HSU|ACU|TAC|TCSW|NTSC|FWNC")'
-            for i in range(len(df))
-
-# older broader institutuion list
-#            f'=REGEXMATCH({institution_col_letter}{i+2}, "BRIT|TEX|OKL|OKLA|LL|LLC|HSU|ILL|WILLI|TCSW|NTSC|VDB|ILLS|BAYLU|CAMU|CSU|DUR|ECSC|NOSU|NWOSU|OCU|PAUH|SAT|SEU|SHST|SRSC|TAES|TTC|TULS|UTEP|WTS")'
-#            for i in range(len(df))
-
-        ]
-    except ValueError:
-        print(f"⚠️ Column 'institutionCode' not found in '{file_path}'. Skipping isInstitution formula.")
+        if "institutionCode" in df.columns:
+            pattern = re.compile(r"^(BRIT|VDB|NLU|HSU|ACU|TAC|TCSW|NTSC|FWNC)$", re.IGNORECASE)
+            df["isInstitution"] = df["institutionCode"].astype(str).str.upper().apply(lambda x: bool(pattern.match(x)))
+        else:
+            print(f"⚠️ Column 'institutionCode' not found in '{file_path}'. Skipping isInstitution.")
+            df["isInstitution"] = pd.NA
+    except Exception as e:
+        print(f"⚠️ Failed isInstitution processing for '{file_path}': {e}")
         df["isInstitution"] = pd.NA
-    
+
+# older broader institution list
+# "BRIT|TEX|OKL|OKLA|LL|LLC|HSU|ILL|WILLI|TCSW|NTSC|VDB|ILLS|BAYLU|CAMU|CSU|DUR|ECSC|NOSU|NWOSU|OCU|PAUH|SAT|SEU|SHST|SRSC|TAES|TTC|TULS|UTEP|WTS"
+#  
+
     try:
         all_columns = list(df.columns)
         lat_col = colnum_to_excel_col(all_columns.index("decimalLatitude"))
@@ -89,18 +90,22 @@ def process_file(file_path):
         latcount_col = colnum_to_excel_col(all_columns.index("decimalLatitudeCount"))
         loncount_col = colnum_to_excel_col(all_columns.index("decimalLongitudeCount"))
         moosh_col = colnum_to_excel_col(all_columns.index("MOOSH"))
-        isinstitution_col = colnum_to_excel_col(all_columns.index("isInstitution"))
+        institutioncount_col = colnum_to_excel_col(all_columns.index("InstitutionCount"))
 
         df["REVIEW"] = [
-            f'=IF(SUM({loncount_col}{row},{moosh_col}{row})=0,'
+            # Top-level guard: if isInstitution is FALSE/0 -> "Outside"
+            f'=IF(({institutioncount_col}{row})=0,"Outside",'
+            # Otherwise run your existing logic
+            f'IF(SUM({loncount_col}{row},{moosh_col}{row})=0,'
             f'IF({finalname_col}{row-1}<>${finalname_col}{row},"NONE","Skip-none"),'
             f'IF(SUM({latcount_col}{row},{loncount_col}{row})=2,'
             f'IF(NOT(ISBLANK({loncount_col}{row})),"ONE","-"),'
             f'IF(NOT(ISBLANK({loncount_col}{row})),'
-            f'IF(COUNTIFS(${moosh_col}$2:{moosh_col}{row},{moosh_col}{row})=1,"TON","Skip-dupCoord"),"-")))'
-            for row in range(2, len(df)+2)
+            f'IF(COUNTIFS(${moosh_col}$2:{moosh_col}{row},{moosh_col}{row})=1,"TON","Skip-dupCoord"),"-"))))'
+            for row in range(2, len(df) + 2)
         ]
 
+        isinstitution_col = colnum_to_excel_col(all_columns.index("isInstitution"))
         df["InstitutionCount"] = [
             f'=IF({finalname_col}{i+2}="", "", COUNTIFS({finalname_col}:{finalname_col}, {finalname_col}{i+2}, {isinstitution_col}:{isinstitution_col}, TRUE))'
             for i in range(len(df))
