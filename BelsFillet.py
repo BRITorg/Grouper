@@ -48,6 +48,13 @@ def process_file(file_path):
         if col not in df.columns:
             df[col] = pd.NA
 
+    # ✅ Fill missing catalogNumber with "ID_" + id
+    if "catalogNumber" in df.columns and "id" in df.columns:
+        df["catalogNumber"] = df.apply(
+            lambda row: f"ID_{row['id']}" if pd.isna(row["catalogNumber"]) or str(row["catalogNumber"]).strip() == "" else row["catalogNumber"],
+            axis=1
+        )
+
     df = df[[col for col in COLUMN_ORDER + CREATED_COLUMNS if col in df.columns]]
 
     # Fill formulas

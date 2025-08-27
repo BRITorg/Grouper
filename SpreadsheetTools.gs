@@ -1,4 +1,4 @@
-//8-21-25
+// 8-27-25
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
@@ -11,28 +11,29 @@ function onOpen() {
     .addItem('Update Cell Shading', 'updateSerialOnKeySheet');
 
   const OriginalMenu = ui.createMenu('Original Sheet Tools')
-    .addItem('Populate Blank Catalog Numbers', 'fillBlankCatalogNumbers')
     .addItem('Populate Grouper_id from Key', 'fillGrouperIDFormulas')
     .addItem('Finalize Review Column', 'FinalizeReview');
 
-
   const ToCogeMenu = ui.createMenu('To CoGe Export Tools')
-    .addItem('Export CSV(s) for CoGe', 'exportCSVsByCounty')
+    .addItem('Export CSV(s) for CoGe', 'exportCSVsByCounty');
 
   const FromCogeMenu = ui.createMenu('From CoGe Import Tools')
     .addItem('Highlight/Count Duplicates', 'highlightCorrectedAndSkippedDuplicates')
-    .addItem('Populate Data from CoGe', 'fillCoGeFormulas')
+    .addItem('Populate Data from CoGe', 'fillCoGeFormulas');
 
-// Main menu with nested submenus
-ui.createMenu('BELSFish')
-  .addSubMenu(KeyMenu)
-  .addSubMenu(OriginalMenu)
-  .addSubMenu(ToCogeMenu)
-  .addSubMenu(FromCogeMenu)
-  .addToUi();
+  // Main menu with nested submenus
+  ui.createMenu('BELSFish')
+    .addSubMenu(KeyMenu)
+    .addSubMenu(OriginalMenu)
+    .addSubMenu(ToCogeMenu)
+    .addSubMenu(FromCogeMenu)
+    .addToUi();
 }
 
-//Key Sheet Tools
+/* -----------------------------
+ * Key Sheet Tools
+ * ----------------------------- */
+
 function removeCommonWords() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Key");
   const dataRange = sheet.getDataRange();
@@ -55,12 +56,12 @@ function removeCommonWords() {
     sheet.getRange(1, outputCol + 1).setValue('unique_locality');
   }
 
-  const wordsToExclude = ["of", "on", "and", "in", "at", "the", "around", "to"];  // <- Words to always remove (case-insensitive)
+  const wordsToExclude = ["of", "on", "and", "in", "at", "the", "around", "to"];  // case-insensitive
   const groups = {};
 
   for (let i = 1; i < data.length; i++) {
     const id = data[i][idCol];
-    const locality = data[i][locCol];
+    const locality = data[i][locCol] || "";
     if (!groups[id]) groups[id] = [];
     groups[id].push({ row: i, text: locality });
   }
@@ -69,7 +70,7 @@ function removeCommonWords() {
   for (const group of Object.values(groups)) {
     const texts = group.map(entry => entry.text);
     const wordSets = texts.map(text =>
-      new Set(text.toLowerCase().match(/\b[\w’'-]+\b/g) || [])
+      new Set(String(text).toLowerCase().match(/\b[\w’'-]+\b/g) || [])
     );
 
     const commonWords = [...wordSets[0]].filter(word =>
@@ -77,7 +78,7 @@ function removeCommonWords() {
     );
 
     for (const entry of group) {
-      const filtered = (entry.text.match(/\b[\w’'-]+\b/g) || [])
+      const filtered = (String(entry.text).match(/\b[\w’'-]+\b/g) || [])
         .filter(word =>
           !commonWords.includes(word.toLowerCase()) &&
           !wordsToExclude.includes(word.toLowerCase())
@@ -88,11 +89,11 @@ function removeCommonWords() {
   }
 
   // Write results
-  for (let i = 1; i < result.length; i++) {
-    sheet.getRange(i + 1, outputCol + 1).setValue(result[i]);
+  if (result.length > 1) {
+    sheet.getRange(2, outputCol + 1, result.length - 1, 1)
+         .setValues(result.slice(1).map(v => [v]));
   }
 }
-
 
 function addDirectionalDecimalsToGroupID() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Key");
@@ -107,7 +108,7 @@ function addDirectionalDecimalsToGroupID() {
     return;
   }
 
-  // Longer direction terms come first so we don’t match "south" inside "southwest"
+  // Longer direction terms first so we don’t match "south" inside "southwest"
   const keywordDecimalMap = {
     'northwest': 0.08,
     'southwest': 0.07,
@@ -126,21 +127,17 @@ function addDirectionalDecimalsToGroupID() {
 
     if (typeof locality === 'string' && id !== '') {
       locality = locality.toLowerCase().trim();
-      const words = locality.split(/\s+/); // Split by whitespace
+      const words = locality.split(/\s+/);
       const matched = new Set();
 
       // Check full string for compound direction keywords first
       for (const keyword in keywordDecimalMap) {
-        if (locality.includes(keyword)) {
-          matched.add(keyword);
-        }
+        if (locality.includes(keyword)) matched.add(keyword);
       }
 
-      // Fallback: check token-by-token
+      // Fallback: token-by-token
       for (const word of words) {
-        if (keywordDecimalMap[word]) {
-          matched.add(word);
-        }
+        if (keywordDecimalMap[word]) matched.add(word);
       }
 
       const baseID = parseFloat(id);
@@ -163,7 +160,7 @@ function addDirectionalDecimalsToGroupID() {
     }
   }
 
-  SpreadsheetApp.getUi().alert('Grouper_IDs updated with directional or proximity decimal values.');
+  SpreadsheetApp.getUi().alert('Grouper_IDs updated with directional/proximity decimal values.');
 }
 
 function calculateGroupConfidence() {
@@ -194,30 +191,29 @@ function calculateGroupConfidence() {
     groups[id].push({ row: i, text });
   }
 
-  // Simple TF-IDF and cosine sim for small groups
-  function tokenize(text) {
-    return text.toLowerCase().match(/\b[\w\.]+\b/g) || [];
-  }
+  // Simple TF and cosine sim per group
+  const tokenize = (text) => String(text).toLowerCase().match(/\b[\w\.]+\b/g) || [];
 
-  function tf(tokens) {
+  const tf = (tokens) => {
     const freq = {};
     tokens.forEach(t => freq[t] = (freq[t] || 0) + 1);
     const tfVec = {};
-    for (let t in freq) tfVec[t] = freq[t] / tokens.length;
+    const n = tokens.length || 1;
+    for (let t in freq) tfVec[t] = freq[t] / n;
     return tfVec;
-  }
+  };
 
-  function cosine(vec1, vec2) {
+  const cosine = (vec1, vec2) => {
     let dot = 0, mag1 = 0, mag2 = 0;
-    const allKeys = new Set([...Object.keys(vec1), ...Object.keys(vec2)]);
-    allKeys.forEach(k => {
+    const keys = new Set([...Object.keys(vec1), ...Object.keys(vec2)]);
+    keys.forEach(k => {
       const a = vec1[k] || 0, b = vec2[k] || 0;
       dot += a * b;
       mag1 += a * a;
       mag2 += b * b;
     });
-    return mag1 && mag2 ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
-  }
+    return (mag1 && mag2) ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
+  };
 
   for (const id in groups) {
     const entries = groups[id];
@@ -234,7 +230,7 @@ function calculateGroupConfidence() {
 
     const confidence = count > 0 ? (simSum / count * 100).toFixed(1) : '100.0';
 
-    // Set confidence for all rows in the group
+    // Set confidence
     entries.forEach(e => {
       sheet.getRange(e.row + 1, confCol + 1).setValue(confidence);
     });
@@ -262,20 +258,19 @@ function updateSerialOnKeySheet() {
   const lastCol = sheet.getLastColumn();
   const data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
-  // Loop from the bottom up to find and delete blank rows
   for (let i = data.length - 1; i >= 1; i--) {
     const row = data[i];
     const isBlank = row.every(cell => cell === "" || cell === null);
     if (isBlank) {
-      sheet.deleteRow(i + 1); // account for zero-based index
+      sheet.deleteRow(i + 1);
     } else {
-      break; // stop once non-blank row is found
+      break;
     }
   }
 
-  // Step 3: Find the column index of "Grouper_ID"
+  // Step 3: Find "Grouper_ID"
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const targetColIndex = headers.indexOf("Grouper_ID") + 1; // +1 because getRange is 1-based
+  const targetColIndex = headers.indexOf("Grouper_ID") + 1; // 1-based
   if (targetColIndex === 0) {
     SpreadsheetApp.getUi().alert(`Column "Grouper_ID" not found.`);
     return;
@@ -283,62 +278,29 @@ function updateSerialOnKeySheet() {
 
   // Step 4: Fill A2 with 1, and A3 downward with formula
   const numRows = sheet.getLastRow();
-  if (numRows < 2) return; // nothing to do
+  if (numRows < 2) return;
 
   sheet.getRange("A2").setValue(1);
 
   if (numRows >= 3) {
-    const formulaRange = sheet.getRange(3, 1, numRows - 2); // from A3 to last row
     const formulas = [];
+    const colLetter = (n) => {
+      let s = "";
+      while (n > 0) { let m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
+      return s;
+    };
+    const gLetter = colLetter(targetColIndex);
 
     for (let i = 3; i <= numRows; i++) {
-      const colLetter = String.fromCharCode(64 + targetColIndex);
-      const rowFormula = `=IF(${colLetter}${i}<>${colLetter}${i - 1}, A${i - 1}+1, A${i - 1})`;
-      formulas.push([rowFormula]);
+      formulas.push([`=IF(${gLetter}${i}<>${gLetter}${i - 1}, A${i - 1}+1, A${i - 1})`]);
     }
-
-    formulaRange.setFormulas(formulas);
+    sheet.getRange(3, 1, numRows - 2, 1).setFormulas(formulas);
   }
 }
 
-//Original Sheet Tools
-function fillBlankCatalogNumbers() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Original");
-  const data = sheet.getDataRange().getValues();
-
-  const headers = data[0];
-  const catalogCol = headers.indexOf("catalogNumber");
-  const idCol = headers.indexOf("id");
-
-  if (catalogCol === -1) {
-    SpreadsheetApp.getUi().alert('The column "catalogNumber" was not found.');
-    return;
-  }
-
-  if (idCol === -1) {
-    SpreadsheetApp.getUi().alert('The column "id" was not found.');
-    return;
-  }
-
-  const updates = [];
-
-  for (let i = 1; i < data.length; i++) {
-    const catalogVal = data[i][catalogCol];
-    const idVal = data[i][idCol];
-
-    if (!catalogVal || catalogVal.toString().trim() === "") {
-      if (idVal !== "" && idVal !== null) {
-        updates.push([i + 1, catalogCol + 1, "ID_" + idVal.toString().trim()]);
-      }
-    }
-  }
-
-  // Apply the updates
-  updates.forEach(([row, col, value]) => {
-    sheet.getRange(row, col).setValue(value);
-  });
-}
-
+/* -----------------------------
+ * Original Sheet Tools
+ * ----------------------------- */
 
 function FinalizeReview() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -348,7 +310,6 @@ function FinalizeReview() {
     return;
   }
 
-  // Find the REVIEW column by header name (row 1)
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const reviewColIndex = headers.indexOf('REVIEW') + 1; // 1-based
   if (reviewColIndex === 0) {
@@ -357,19 +318,15 @@ function FinalizeReview() {
   }
 
   const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) {
-    // No data rows
-    return;
-  }
+  if (lastRow <= 1) return;
 
-  // Range beneath the header in the REVIEW column
   const reviewRange = sheet.getRange(2, reviewColIndex, lastRow - 1, 1);
-
-  // Do an in-place "paste values only"
   reviewRange.copyTo(reviewRange, { contentsOnly: true });
 }
 
-
+/* -----------------------------
+ * From CoGe <-> Original Sync
+ * ----------------------------- */
 
 function fillCoGeFormulas() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -384,29 +341,23 @@ function fillCoGeFormulas() {
     return;
   }
 
-  // ====== CONFIG: set these to your header text exactly as it appears in row 1 ======
-  // Original sheet headers
-  const ORIGINAL_REVIEW_HEADER = "REVIEW";            // (AG previously)
-  const ORIGINAL_KEY_HEADER    = "Grouper_ID";     // (AA previously) — used to match to From CoGe
+  // ====== CONFIG ======
+  const ORIGINAL_REVIEW_HEADER = "REVIEW";
+  const ORIGINAL_KEY_HEADER    = "Grouper_ID";
 
-  // From CoGe headers (the column to MATCH on and the source columns to pull)
-  const COGE_MATCH_HEADER      = "Grouper_ID";     // (AD previously) — used in the FILTER condition
+  const COGE_MATCH_HEADER      = "Grouper_ID";
   const MAP = [
-    // { originalHeader: header text in Original where the value/formula goes,
-    //   cogeHeader: header text in From CoGe to pull from,
-    //   asDate: true to wrap with TEXT(...,"MM/DD/YY") }
-    { originalHeader: "Completed",                        cogeHeader: "Date verified", asDate: true  }, // F ← From CoGe F
-    { originalHeader: "georeferencedBy",                  cogeHeader: "Verified by",    asDate: false }, // G ← From CoGe I
-    { originalHeader: "decimalLatitude",                  cogeHeader: "Corrected latitude",       asDate: false }, // H ← From CoGe H
-    { originalHeader: "decimalLongitude",                 cogeHeader: "Corrected longitude",       asDate: false }, // J ← From CoGe J
-    { originalHeader: "coordinateUncertaintyInMeters",    cogeHeader: "Corrected uncertainty radius",       asDate: false }, // L ← From CoGe E
-    { originalHeader: "georeferenceRemarks",              cogeHeader: "Verification remarks",       asDate: false }, // P ← From CoGe G
+    { originalHeader: "Completed",                     cogeHeader: "Date verified",                 asDate: true  },
+    { originalHeader: "georeferencedBy",               cogeHeader: "Verified by",                   asDate: false },
+    { originalHeader: "decimalLatitude",               cogeHeader: "Corrected latitude",            asDate: false },
+    { originalHeader: "decimalLongitude",              cogeHeader: "Corrected longitude",           asDate: false },
+    { originalHeader: "coordinateUncertaintyInMeters", cogeHeader: "Corrected uncertainty radius",  asDate: false },
+    { originalHeader: "georeferenceRemarks",           cogeHeader: "Verification remarks",          asDate: false },
   ];
 
-  // Constant fills for Original
   const CONSTANTS = [
-    { originalHeader: "georeferenceProtocol", text: "CCH2 Georef. Protocol 09/30/2020" }, // M
-    { originalHeader: "georeferenceSources",     text: "GEOLocate Batch Processing Tool"  }, // N
+    { originalHeader: "georeferenceProtocol", text: "CCH2 Georef. Protocol 09/30/2020" },
+    { originalHeader: "georeferenceSources",  text: "GEOLocate Batch Processing Tool"  },
   ];
   // ====== /CONFIG ======
 
@@ -422,24 +373,22 @@ function fillCoGeFormulas() {
       throw new Error(`Header "${name}" not found in ${where}. Available: ${headers.join(" | ")}`);
     }
     return i + 1; // 1-based
-  };
+    };
 
   // Read headers
   const origHeaders = original.getRange(1, 1, 1, original.getLastColumn()).getValues()[0].map(String);
   const cogeHeaders = coge.getRange(1, 1, 1, coge.getLastColumn()).getValues()[0].map(String);
 
-  // Resolve dynamic columns on Original
+  // Resolve columns
   const reviewCol = headerIndexOrDie(origHeaders, ORIGINAL_REVIEW_HEADER, "Original");
   const reviewLetter = toColLetter(reviewCol);
 
   const keyCol = headerIndexOrDie(origHeaders, ORIGINAL_KEY_HEADER, "Original");
   const keyLetter = toColLetter(keyCol);
 
-  // Resolve dynamic column on From CoGe used for matching
   const cogeMatchCol = headerIndexOrDie(cogeHeaders, COGE_MATCH_HEADER, "From CoGe");
   const cogeMatchLetter = toColLetter(cogeMatchCol);
 
-  // Resolve targets (Original dest + From CoGe source)
   const resolvedTargets = MAP.map(t => {
     const origCol = headerIndexOrDie(origHeaders, t.originalHeader, "Original");
     const cogeCol = headerIndexOrDie(cogeHeaders, t.cogeHeader, "From CoGe");
@@ -451,7 +400,6 @@ function fillCoGeFormulas() {
     };
   });
 
-  // Resolve constants (Original dest headers)
   const resolvedConstants = CONSTANTS.map(t => {
     const origCol = headerIndexOrDie(origHeaders, t.originalHeader, "Original");
     return { col: origCol, text: t.text };
@@ -463,7 +411,7 @@ function fillCoGeFormulas() {
   const startRow = 2;
   const numRows = lastRow - 1;
 
-  // Read REVIEW (dynamic) and all destination columns once
+  // Read REVIEW & destinations once
   const reviewVals = original.getRange(startRow, reviewCol, numRows, 1).getValues();
 
   const destValues = {};
@@ -482,7 +430,6 @@ function fillCoGeFormulas() {
 
     // Case-insensitive check for 'none' or 'skip-none'
     if (review === "none" || review === "skip-none") {
-      // Build filter condition referencing dynamic key columns
       const keyRef = `${keyLetter}${row}`;
       const matchRange = `'From CoGe'!${cogeMatchLetter}:${cogeMatchLetter}`;
 
@@ -508,7 +455,9 @@ function fillCoGeFormulas() {
   }
 }
 
-//To CoGe Tools
+/* -----------------------------
+ * To CoGe Tools
+ * ----------------------------- */
 
 function exportCSVsByCounty() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("To CoGe");
@@ -518,8 +467,8 @@ function exportCSVsByCounty() {
   const headerLength = headers.length;
 
   const filteredRows = data.slice(1).filter(row => {
-    const status = row[0];             // Column A: "NONE"
-    const institutionCount = row[1];   // Column B: InstitutionCount
+    const status = row[0];           // Column A: "NONE"
+    const institutionCount = row[1]; // Column B: InstitutionCount
     return status === 'NONE' && Number(institutionCount) > 0;
   });
 
@@ -529,11 +478,10 @@ function exportCSVsByCounty() {
   }
 
   const grouped = {};
-
   filteredRows.forEach(row => {
-    const county = row[10] || 'Blank'; // Column K is index 9, contains county
+    const county = row[10] || 'Blank'; // Column K (0-based index 10)
     if (!grouped[county]) grouped[county] = [];
-    grouped[county].push(row.slice(0, headerLength)); // enforce same column count
+    grouped[county].push(row.slice(0, headerLength));
   });
 
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HH:mm:ss');
@@ -541,19 +489,19 @@ function exportCSVsByCounty() {
 
   for (const county in grouped) {
     let csvContent = headers.join(",") + "\n";
-
     grouped[county].forEach(row => {
       const cleaned = row.map(cell => `"${String(cell).replace(/"/g, '""')}"`);
       csvContent += cleaned.join(",") + "\n";
     });
-
     folder.createFile(`${county}_Export.csv`, csvContent, MimeType.CSV);
   }
 
   SpreadsheetApp.getUi().alert('CSV exports completed. Check your Google Drive.');
 }
 
-//From CoGe Tools
+/* -----------------------------
+ * From CoGe Tools
+ * ----------------------------- */
 
 function highlightCorrectedAndSkippedDuplicates() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -563,15 +511,14 @@ function highlightCorrectedAndSkippedDuplicates() {
     return;
   }
 
-  // ---------- 0) CLEANUP: Replace "N\A" (any case, whole-cell) with blank in one shot ----------
-  // NOTE: matchEntireCell(true) prevents touching "X N\A Y"
+  // 0) CLEANUP: Replace "N\A" (any case, whole-cell) with blank in one shot
   sheet.createTextFinder("N\\A")
     .matchCase(false)
     .matchEntireCell(true)
     .useRegularExpression(false)
     .replaceAllWith("");
 
-  // ---------- Helpers ----------
+  // Helpers
   const colToLetter = (col) => {
     let s = "";
     while (col > 0) {
@@ -602,8 +549,7 @@ function highlightCorrectedAndSkippedDuplicates() {
     return;
   }
 
-  // ---------- 1) Pre-parse values for speed ----------
-  // Row index in arrays is sheet row (1-based) for readability; we ignore index 0.
+  // 1) Pre-parse values for speed
   const typeLower = new Array(lastRow + 1);
   const dateMs    = new Array(lastRow + 1);
   for (let r = 2; r <= lastRow; r++) {
@@ -614,8 +560,8 @@ function highlightCorrectedAndSkippedDuplicates() {
     dateMs[r] = isNaN(d) ? null : d.getTime();
   }
 
-  // ---------- 2) Group rows by CatalogNumber ----------
-  const groups = new Map(); // cat -> int[] (rows)
+  // 2) Group rows by CatalogNumber
+  const groups = new Map(); // cat -> rows[]
   for (let r = 2; r <= lastRow; r++) {
     const cat = data[r - 1][catalogIndex];
     if (!cat) continue;
@@ -624,13 +570,14 @@ function highlightCorrectedAndSkippedDuplicates() {
     arr.push(r);
   }
 
-  // ---------- 3) Decide highlights (collect A1 row ranges to batch-apply) ----------
+  // 3) Decide highlights
   const lastColLetter = colToLetter(lastCol);
-  const greenRowsA1 = [];
-  const redRowsA1 = [];
-  const orangeRowsA1 = [];
-
   const rowBand = (r) => `A${r}:${lastColLetter}${r}`;
+
+  const greenRanges = [];  // newest "Corrected"
+  const redRanges   = [];  // older duplicates (Corrected) or newest "Skipped" when beaten by newer Corrected
+  const orangeRanges= [];  // ambiguous/mixed/others
+
   const newestByDate = (rows) => {
     if (rows.length === 0) return null;
     let best = null, bestMs = -Infinity;
@@ -643,9 +590,8 @@ function highlightCorrectedAndSkippedDuplicates() {
   };
 
   for (const [, rows] of groups) {
-    if (rows.length < 2) continue; // skip singletons
+    if (rows.length < 2) continue;
 
-    // Partition by type
     const corrected = [];
     const skipped = [];
     const other = [];
@@ -663,38 +609,30 @@ function highlightCorrectedAndSkippedDuplicates() {
       const ds = (ns && dateMs[ns] != null) ? dateMs[ns] : null;
 
       if (dc != null && ds != null && dc > ds) {
-        greenRowsA1.push(rowBand(nc));
-        redRowsA1.push(rowBand(ns));
+        greenRanges.push(rowBand(nc));
+        redRanges.push(rowBand(ns));
         for (const r of rows) {
-          if (r !== nc && r !== ns) orangeRowsA1.push(rowBand(r));
+          if (r !== nc && r !== ns) orangeRanges.push(rowBand(r));
         }
       } else {
-        // dates missing or corrected not newer -> all orange
-        for (const r of rows) orangeRowsA1.push(rowBand(r));
+        for (const r of rows) orangeRanges.push(rowBand(r));
       }
     } else if (corrected.length > 1 && skipped.length === 0) {
       const nc = newestByDate(corrected);
-      greenRowsA1.push(rowBand(nc));
-      for (const r of corrected) if (r !== nc) redRowsA1.push(rowBand(r));
-      for (const r of rows) if (corrected.indexOf(r) === -1) orangeRowsA1.push(rowBand(r));
+      greenRanges.push(rowBand(nc));
+      for (const r of corrected) if (r !== nc) redRanges.push(rowBand(r));
+      for (const r of rows) if (corrected.indexOf(r) === -1) orangeRanges.push(rowBand(r));
     } else {
-      // only skippeds, or mixed with no clear rule -> all orange
-      for (const r of rows) orangeRowsA1.push(rowBand(r));
+      for (const r of rows) orangeRanges.push(rowBand(r));
     }
   }
 
-  // ---------- 4) Clear previous backgrounds in one call ----------
-  if (lastRow > 1 && lastCol > 0) {
-    sheet.getRange(2, 1, lastRow - 1, lastCol).setBackground(null);
-  }
+  // 4) Apply colors in batches
+  if (greenRanges.length) sheet.getRangeList(greenRanges).setBackground("#d9ead3"); // light green
+  if (redRanges.length)   sheet.getRangeList(redRanges).setBackground("#f4cccc");   // light red
+  if (orangeRanges.length)sheet.getRangeList(orangeRanges).setBackground("#fce5cd"); // light orange
 
-  // ---------- 5) Apply highlights with 3 batched RangeList calls ----------
-  if (greenRowsA1.length) sheet.getRangeList(greenRowsA1).setBackground("#b6d7a8");
-  if (redRowsA1.length)   sheet.getRangeList(redRowsA1).setBackground("#f4cccc");
-  if (orangeRowsA1.length)sheet.getRangeList(orangeRowsA1).setBackground("#fce5cd");
-
-  // ---------- 6) Add/overwrite "Grouper_ID" and "count" using single ARRAYFORMULAs ----------
-  // Put them at the next two free columns.
+  // 5) Add/overwrite "Grouper_ID" and "count" via single ARRAYFORMULAs to the right of existing data
   const startCol = lastCol + 1;
   const grouperCol = startCol;
   const countCol = startCol + 1;
@@ -704,16 +642,12 @@ function highlightCorrectedAndSkippedDuplicates() {
 
   const catColLetter = colToLetter(catalogIndex + 1);
 
-  // Clear old contents in those columns (if any) then set ArrayFormulas
   if (lastRow >= 2) {
     sheet.getRange(2, grouperCol, lastRow - 1, 1).clearContent();
     sheet.getRange(2, countCol, lastRow - 1, 1).clearContent();
 
-    // VLOOKUP version (fast). If you must keep FILTER, swap the formula below.
-    // AD is column 30 on Original (A=1 ... AD=30). Adjust if different.
     sheet.getRange(2, grouperCol).setFormula(
-      `=ARRAYFORMULA(IF(ROW(${catColLetter}2:${catColLetter})=1,"",` +
-      `IF(${catColLetter}2:${catColLetter}="", "", IFERROR(VLOOKUP(${catColLetter}2:${catColLetter}, Original!A:AD, 30, FALSE), ""))))`
+      `=ARRAYFORMULA(IF(ROW(${catColLetter}2:${catColLetter})=1,"",IF(${catColLetter}2:${catColLetter}="","",IFERROR(VLOOKUP(${catColLetter}2:${catColLetter}, Original!A:ZZ, MATCH("Grouper_ID", Original!1:1, 0), FALSE),""))))`
     );
 
     sheet.getRange(2, countCol).setFormula(
@@ -722,14 +656,19 @@ function highlightCorrectedAndSkippedDuplicates() {
   }
 }
 
-
-
-
+/* -----------------------------
+ * Original <- Key copy of Grouper_ID
+ * ----------------------------- */
 
 function fillGrouperIDFormulas() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const originalSheet = ss.getSheetByName("Original");
   const keySheet = ss.getSheetByName("Key");
+
+  if (!originalSheet || !keySheet) {
+    SpreadsheetApp.getUi().alert('Missing "Original" or "Key" sheet.');
+    return;
+  }
 
   const originalHeaders = originalSheet.getRange(1, 1, 1, originalSheet.getLastColumn()).getValues()[0];
   const keyHeaders = keySheet.getRange(1, 1, 1, keySheet.getLastColumn()).getValues()[0];
@@ -750,11 +689,10 @@ function fillGrouperIDFormulas() {
   }
 
   const lastRow = originalSheet.getLastRow();
-  if (lastRow < 2) return; // nothing to do
+  if (lastRow < 2) return;
 
   const numRows = lastRow - 1;
   const originalBels = originalSheet.getRange(2, originalBelsCol + 1, numRows, 1).getValues();
-
   const keyData = keySheet.getRange(2, 1, Math.max(keySheet.getLastRow() - 1, 0), keySheet.getLastColumn()).getValues();
 
   // Build bels_location_id → Grouper_ID map
@@ -767,15 +705,11 @@ function fillGrouperIDFormulas() {
     }
   });
 
-  // Build output column (blank when no match)
+  // Output (blank when no match)
   const outCol = originalBels.map(belsRow => {
     const belsId = belsRow[0];
-    if (belsId in belsToGrouper) {
-      return [belsToGrouper[belsId]];
-    }
-    return [null]; // blank cell when no match
+    return [belsToGrouper.hasOwnProperty(belsId) ? belsToGrouper[belsId] : null];
   });
 
-  // Write ONLY the target column
   originalSheet.getRange(2, targetCol + 1, numRows, 1).setValues(outCol);
 }
