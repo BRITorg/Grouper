@@ -766,7 +766,7 @@ def validate_directional_splits(grouped):
             suffix = f".{idx}"
             to_update = members[distance_lists.apply(tuple) == sig].index
             grouped.loc[to_update, 'Grouper_ID'] = f"{group_id}{suffix}"
-        return grouped
+    return grouped
 
 
 def set_null_groups_to_zero(grouped):
